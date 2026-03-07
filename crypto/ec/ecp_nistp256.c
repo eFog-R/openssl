@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2011-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -118,8 +118,9 @@ typedef limb longfelem[NLIMBS * 2];
 typedef u64 smallfelem[NLIMBS];
 
 /* This is the value of the prime as four 64-bit words, little-endian. */
-static const u64 kPrime[4] =
-    { 0xfffffffffffffffful, 0xffffffff, 0, 0xffffffff00000001ul };
+static const u64 kPrime[4] = {
+    0xfffffffffffffffful, 0xffffffff, 0, 0xffffffff00000001ul
+};
 static const u64 bottom63bits = 0x7ffffffffffffffful;
 
 /*
@@ -292,8 +293,9 @@ static void felem_diff(felem out, const felem in)
 #define two107m43p11 (((limb)1) << 107) - (((limb)1) << 43) + (((limb)1) << 11)
 
 /* zero107 is 0 mod p */
-static const felem zero107 =
-    { two107m43m11, two107, two107m43p11, two107m43p11 };
+static const felem zero107 = {
+    two107m43m11, two107, two107m43p11, two107m43p11
+};
 
 /*-
  * An alternative felem_diff for larger inputs |in|
@@ -1874,7 +1876,7 @@ void EC_nistp256_pre_comp_free(NISTP256_PRE_COMP *pre)
         return;
 
     CRYPTO_DOWN_REF(&pre->references, &i);
-    REF_PRINT_COUNT("EC_nistp256", pre);
+    REF_PRINT_COUNT("EC_nistp256", i, pre);
     if (i > 0)
         return;
     REF_ASSERT_ISNT(i < 0);
@@ -2086,11 +2088,11 @@ int ossl_ec_GFp_nistp256_points_mul(const EC_GROUP *group, EC_POINT *r,
              */
             mixed = 1;
         }
-        secrets = OPENSSL_malloc(sizeof(*secrets) * num_points);
-        pre_comp = OPENSSL_malloc(sizeof(*pre_comp) * num_points);
+        secrets = OPENSSL_calloc(num_points, sizeof(*secrets));
+        pre_comp = OPENSSL_calloc(num_points, sizeof(*pre_comp));
         if (mixed)
-            tmp_smallfelems =
-              OPENSSL_malloc(sizeof(*tmp_smallfelems) * (num_points * 17 + 1));
+            tmp_smallfelems = OPENSSL_malloc_array(num_points * 17 + 1,
+                                                   sizeof(*tmp_smallfelems));
         if ((secrets == NULL) || (pre_comp == NULL)
             || (mixed && (tmp_smallfelems == NULL)))
             goto err;
@@ -2099,8 +2101,6 @@ int ossl_ec_GFp_nistp256_points_mul(const EC_GROUP *group, EC_POINT *r,
          * we treat NULL scalars as 0, and NULL points as points at infinity,
          * i.e., they contribute nothing to the linear combination
          */
-        memset(secrets, 0, sizeof(*secrets) * num_points);
-        memset(pre_comp, 0, sizeof(*pre_comp) * num_points);
         for (i = 0; i < num_points; ++i) {
             if (i == num) {
                 /*

@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -37,9 +37,10 @@ typedef unsigned int u_int;
 
 #ifndef OPENSSL_NO_SOCK
 
+# include "internal/e_os.h"
 # include "apps.h"
 # include "s_apps.h"
-# include "internal/sockets.h"
+# include "internal/sockets.h" /* for openssl_fdset() */
 
 # include <openssl/bio.h>
 # include <openssl/err.h>
@@ -83,9 +84,6 @@ int init_client(int *sock, const char *host, const char *port,
     int found = 0;
     int ret;
     int options = 0;
-
-    if (tfo && ba_ret != NULL)
-        *ba_ret = NULL;
 
     if (BIO_sock_init() != 1)
         return 0;
@@ -175,8 +173,16 @@ int init_client(int *sock, const char *host, const char *port,
         }
 
         /* Save the address */
-        if (tfo || !doconn)
+        if (tfo || !doconn) {
+            if (ba_ret == NULL) {
+                BIO_printf(bio_err, "Internal error\n");
+                BIO_closesocket(*sock);
+                *sock = INVALID_SOCKET;
+                goto out;
+            }
+
             *ba_ret = BIO_ADDR_dup(BIO_ADDRINFO_address(ai));
+        }
 
         /* Success, don't try any more addresses */
         break;
@@ -413,6 +419,12 @@ int do_server(int *accept_sock, const char *host, const char *port,
                 BIO_closesocket(asock);
                 break;
             }
+
+            if (naccept != -1)
+                naccept--;
+            if (naccept == 0)
+                BIO_closesocket(asock);
+
             BIO_set_tcp_ndelay(sock, 1);
             i = (*cb)(sock, type, protocol, context);
 
@@ -443,11 +455,12 @@ int do_server(int *accept_sock, const char *host, const char *port,
 
             BIO_closesocket(sock);
         } else {
+            if (naccept != -1)
+                naccept--;
+
             i = (*cb)(asock, type, protocol, context);
         }
 
-        if (naccept != -1)
-            naccept--;
         if (i < 0 || naccept == 0) {
             BIO_closesocket(asock);
             ret = i;

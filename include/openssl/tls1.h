@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  * Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved
  * Copyright 2005 Nokia. All rights reserved.
  *
@@ -231,6 +231,8 @@ extern "C" {
 # define TLSEXT_max_fragment_length_1024        2
 # define TLSEXT_max_fragment_length_2048        3
 # define TLSEXT_max_fragment_length_4096        4
+/* OpenSSL value for unset maximum fragment length extension */
+# define TLSEXT_max_fragment_length_UNSPECIFIED 255
 
 /*
  * TLS Certificate Type (for RFC7250)
@@ -280,6 +282,8 @@ int SSL_get_sigalgs(SSL *s, int idx,
                     int *psign, int *phash, int *psignandhash,
                     unsigned char *rsig, unsigned char *rhash);
 
+char *SSL_get1_builtin_sigalgs(OSSL_LIB_CTX *libctx);
+
 int SSL_get_shared_sigalgs(SSL *s, int idx,
                            int *psign, int *phash, int *psignandhash,
                            unsigned char *rsig, unsigned char *rhash);
@@ -320,6 +324,12 @@ __owur int SSL_check_chain(SSL *s, X509 *x, EVP_PKEY *pk, STACK_OF(X509) *chain)
 
 # define SSL_set_tlsext_status_ocsp_resp(ssl, arg, arglen) \
         SSL_ctrl(ssl,SSL_CTRL_SET_TLSEXT_STATUS_REQ_OCSP_RESP,arglen,arg)
+
+# define SSL_get0_tlsext_status_ocsp_resp_ex(ssl, arg) \
+    SSL_ctrl(ssl, SSL_CTRL_GET_TLSEXT_STATUS_REQ_OCSP_RESP_EX, 0, arg)
+
+# define SSL_set0_tlsext_status_ocsp_resp_ex(ssl, arg) \
+    SSL_ctrl(ssl, SSL_CTRL_SET_TLSEXT_STATUS_REQ_OCSP_RESP_EX, 0, arg)
 
 # define SSL_CTX_set_tlsext_servername_callback(ctx, cb) \
         SSL_CTX_callback_ctrl(ctx,SSL_CTRL_SET_TLSEXT_SERVERNAME_CB,\

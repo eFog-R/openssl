@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2014-2025 The OpenSSL Project Authors. All Rights Reserved.
  * Copyright (c) 2014, Intel Corporation. All Rights Reserved.
  * Copyright (c) 2015, CloudFlare, Inc.
  *
@@ -37,7 +37,6 @@
 # define TOBN(hi,lo)    ((BN_ULONG)hi<<32|lo)
 #endif
 
-#define ALIGNPTR(p,N)   ((unsigned char *)p+N-(size_t)p%N)
 #define P256_LIMBS      (256/BN_BITS2)
 
 typedef unsigned short u16;
@@ -623,14 +622,13 @@ __owur static int ecp_nistz256_windowed_mul(const EC_GROUP *group,
     void *table_storage = NULL;
 
     if ((num * 16 + 6) > OPENSSL_MALLOC_MAX_NELEMS(P256_POINT)
-        || (table_storage =
-            OPENSSL_malloc((num * 16 + 5) * sizeof(P256_POINT) + 64)) == NULL
-        || (p_str =
-            OPENSSL_malloc(num * 33 * sizeof(unsigned char))) == NULL
-        || (scalars = OPENSSL_malloc(num * sizeof(BIGNUM *))) == NULL)
+        || (table =
+            OPENSSL_aligned_alloc_array(num * 16 + 5, sizeof(P256_POINT), 64,
+                                        &table_storage)) == NULL
+        || (p_str = OPENSSL_malloc_array(num, 33)) == NULL
+        || (scalars = OPENSSL_malloc_array(num, sizeof(BIGNUM *))) == NULL)
         goto err;
 
-    table = (void *)ALIGNPTR(table_storage, 64);
     temp = (P256_POINT *)(table + num);
 
     for (i = 0; i < num; i++) {
@@ -816,7 +814,7 @@ __owur static int ecp_nistz256_mult_precompute(EC_GROUP *group, BN_CTX *ctx)
     size_t w;
 
     PRECOMP256_ROW *preComputedTable = NULL;
-    unsigned char *precomp_storage = NULL;
+    void *precomp_storage = NULL;
 
     /* if there is an old NISTZ256_PRE_COMP object, throw it away */
     EC_pre_comp_free(group);
@@ -856,11 +854,10 @@ __owur static int ecp_nistz256_mult_precompute(EC_GROUP *group, BN_CTX *ctx)
 
     w = 7;
 
-    if ((precomp_storage =
-         OPENSSL_malloc(37 * 64 * sizeof(P256_POINT_AFFINE) + 64)) == NULL)
+    if ((preComputedTable =
+         OPENSSL_aligned_alloc_array(37 * 64, sizeof(P256_POINT_AFFINE), 64,
+                                     &precomp_storage)) == NULL)
         goto err;
-
-    preComputedTable = (void *)ALIGNPTR(precomp_storage, 64);
 
     P = EC_POINT_new(group);
     T = EC_POINT_new(group);
@@ -1109,11 +1106,11 @@ __owur static int ecp_nistz256_points_mul(const EC_GROUP *group,
          * Without a precomputed table for the generator, it has to be
          * handled like a normal point.
          */
-        new_scalars = OPENSSL_malloc((num + 1) * sizeof(BIGNUM *));
+        new_scalars = OPENSSL_malloc_array(num + 1, sizeof(BIGNUM *));
         if (new_scalars == NULL)
             goto err;
 
-        new_points = OPENSSL_malloc((num + 1) * sizeof(EC_POINT *));
+        new_points = OPENSSL_malloc_array(num + 1, sizeof(EC_POINT *));
         if (new_points == NULL)
             goto err;
 
@@ -1238,7 +1235,7 @@ void EC_nistz256_pre_comp_free(NISTZ256_PRE_COMP *pre)
         return;
 
     CRYPTO_DOWN_REF(&pre->references, &i);
-    REF_PRINT_COUNT("EC_nistz256", pre);
+    REF_PRINT_COUNT("EC_nistz256", i, pre);
     if (i > 0)
         return;
     REF_ASSERT_ISNT(i < 0);
@@ -1445,6 +1442,131 @@ err:
 # define ecp_nistz256_inv_mod_ord NULL
 #endif
 
+static int ecp_nistz256group_full_init(EC_GROUP *group,
+                                       const unsigned char *params) {
+    BN_CTX *ctx = NULL;
+    BN_MONT_CTX *mont = NULL, *ordmont = NULL;
+    const int param_len = 32;
+    const int seed_len = 20;
+    int ok = 0;
+    uint32_t hi_order_n = 0xccd1c8aa;
+    uint32_t lo_order_n = 0xee00bc4f;
+    BIGNUM *p = NULL, *a = NULL, *b = NULL, *x = NULL, *y = NULL, *one = NULL,
+        *order = NULL;
+    EC_POINT *P = NULL;
+
+    if ((ctx = BN_CTX_new_ex(group->libctx)) == NULL) {
+        ERR_raise(ERR_LIB_EC, ERR_R_MALLOC_FAILURE);
+        return 0;
+    }
+
+    if (!EC_GROUP_set_seed(group, params, seed_len)) {
+        ERR_raise(ERR_LIB_EC, ERR_R_EC_LIB);
+        goto err;
+    }
+    params += seed_len;
+
+    if ((p = BN_bin2bn(params + 0 * param_len, param_len, NULL)) == NULL
+        || (a = BN_bin2bn(params + 1 * param_len, param_len, NULL)) == NULL
+        || (b = BN_bin2bn(params + 2 * param_len, param_len, NULL)) == NULL) {
+        ERR_raise(ERR_LIB_EC, ERR_R_BN_LIB);
+        goto err;
+    }
+
+    /*
+     * Set up curve params and montgomery for field
+     * Start by setting up montgomery and one
+     */
+    mont = BN_MONT_CTX_new();
+    if (mont == NULL)
+        goto err;
+
+    if (!ossl_bn_mont_ctx_set(mont, p, 256, params + 6 * param_len, param_len,
+                              1, 0))
+        goto err;
+
+    one = BN_new();
+    if (one == NULL) {
+        ERR_raise(ERR_LIB_EC, ERR_R_BN_LIB);
+        goto err;
+    }
+    if (!BN_to_montgomery(one, BN_value_one(), mont, ctx)){
+        ERR_raise(ERR_LIB_EC, ERR_R_BN_LIB);
+        goto err;
+    }
+    group->field_data1 = mont;
+    mont = NULL;
+    group->field_data2 = one;
+    one = NULL;
+
+    if (!ossl_ec_GFp_simple_group_set_curve(group, p, a, b, ctx)) {
+         ERR_raise(ERR_LIB_EC, ERR_R_EC_LIB);
+        goto err;
+    }
+
+    if ((P = EC_POINT_new(group)) == NULL) {
+        ERR_raise(ERR_LIB_EC, ERR_R_EC_LIB);
+        goto err;
+    }
+
+    if ((x = BN_bin2bn(params + 3 * param_len, param_len, NULL)) == NULL
+        || (y = BN_bin2bn(params + 4 * param_len, param_len, NULL)) == NULL) {
+        ERR_raise(ERR_LIB_EC, ERR_R_BN_LIB);
+        goto err;
+    }
+    if (!EC_POINT_set_affine_coordinates(group, P, x, y, ctx)) {
+        ERR_raise(ERR_LIB_EC, ERR_R_EC_LIB);
+        goto err;
+    }
+    if ((order = BN_bin2bn(params + 5 * param_len, param_len, NULL)) == NULL
+        || !BN_set_word(x, (BN_ULONG)1)) { /* cofactor is 1 */
+        ERR_raise(ERR_LIB_EC, ERR_R_BN_LIB);
+        goto err;
+    }
+
+    /*
+     * Set up generator and order and montgomery data
+     */
+    group->generator = EC_POINT_new(group);
+    if (group->generator == NULL){
+        ERR_raise(ERR_LIB_EC, ERR_R_EC_LIB);
+        goto err;
+    }
+    if (!EC_POINT_copy(group->generator, P))
+        goto err;
+    if (!BN_copy(group->order, order))
+        goto err;
+    if (!BN_set_word(group->cofactor, 1))
+        goto err;
+
+    ordmont = BN_MONT_CTX_new();
+    if (ordmont  == NULL)
+        goto err;
+    if (!ossl_bn_mont_ctx_set(ordmont, order, 256, params + 7 * param_len,
+                              param_len, lo_order_n, hi_order_n))
+        goto err;
+
+    group->mont_data = ordmont;
+    ordmont = NULL;
+
+    ok = 1;
+
+ err:
+    EC_POINT_free(P);
+    BN_CTX_free(ctx);
+    BN_MONT_CTX_free(mont);
+    BN_MONT_CTX_free(ordmont);
+    BN_free(p);
+    BN_free(one);
+    BN_free(a);
+    BN_free(b);
+    BN_free(order);
+    BN_free(x);
+    BN_free(y);
+
+    return ok;
+}
+
 const EC_METHOD *EC_GFp_nistz256_method(void)
 {
     static const EC_METHOD ret = {
@@ -1501,7 +1623,8 @@ const EC_METHOD *EC_GFp_nistz256_method(void)
         0,                                          /* blind_coordinates */
         0,                                          /* ladder_pre */
         0,                                          /* ladder_step */
-        0                                           /* ladder_post */
+        0,                                          /* ladder_post */
+        ecp_nistz256group_full_init
     };
 
     return &ret;

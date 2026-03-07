@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -335,7 +335,7 @@ static int send_record(BIO *rbio, unsigned char type, uint64_t seqnr,
             || !TEST_ptr(enc_ctx = EVP_CIPHER_CTX_new())
             || !TEST_true(EVP_CipherInit_ex(enc_ctx, EVP_aes_128_cbc(), NULL,
                                             enc_key, iv, 1))
-            || !TEST_int_ge(EVP_Cipher(enc_ctx, enc, enc, len), 0))
+            || !TEST_int_ge(EVP_Cipher(enc_ctx, enc, enc, (unsigned int)len), 0))
         goto end;
 
     /* Finally write header (from fragmented variables), IV and encrypted record */
@@ -348,7 +348,7 @@ static int send_record(BIO *rbio, unsigned char type, uint64_t seqnr,
     BIO_write(rbio, lenbytes, 2);
 
     BIO_write(rbio, iv, sizeof(iv));
-    BIO_write(rbio, enc, len);
+    BIO_write(rbio, enc, (int)len);
     ret = 1;
  end:
     EVP_MAC_free(hmac);
@@ -508,7 +508,6 @@ static int test_bad_dtls(void)
     if (!TEST_ptr(con)
             || !TEST_true(SSL_set_session(con, sess)))
         goto end;
-    SSL_SESSION_free(sess);
 
     rbio = BIO_new(BIO_s_mem());
     wbio = BIO_new(BIO_s_mem());
@@ -596,6 +595,7 @@ static int test_bad_dtls(void)
     testresult = 1;
 
  end:
+    SSL_SESSION_free(sess);
     BIO_free(rbio);
     BIO_free(wbio);
     SSL_free(con);

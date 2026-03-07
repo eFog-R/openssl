@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2024 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -25,6 +25,7 @@
 #include "crypto/bn.h"
 #include "crypto/evp.h"
 #include "crypto/rsa.h"
+#include "crypto/sparse_array.h"
 #include "crypto/security_bits.h"
 #include "rsa_local.h"
 
@@ -92,6 +93,10 @@ static RSA *rsa_new_intern(ENGINE *engine, OSSL_LIB_CTX *libctx)
         return NULL;
     }
 
+    ret->blindings_sa = ossl_rsa_alloc_blinding();
+    if (ret->blindings_sa == NULL)
+        goto err;
+
     ret->libctx = libctx;
     ret->meth = RSA_get_default_method();
 #if !defined(OPENSSL_NO_ENGINE) && !defined(FIPS_MODULE)
@@ -141,7 +146,7 @@ void RSA_free(RSA *r)
         return;
 
     CRYPTO_DOWN_REF(&r->references, &i);
-    REF_PRINT_COUNT("RSA", r);
+    REF_PRINT_COUNT("RSA", i, r);
     if (i > 0)
         return;
     REF_ASSERT_ISNT(i < 0);
@@ -159,7 +164,7 @@ void RSA_free(RSA *r)
     CRYPTO_THREAD_lock_free(r->lock);
     CRYPTO_FREE_REF(&r->references);
 
-#ifdef FIPS_MODULE
+#ifdef OPENSSL_PEDANTIC_ZEROIZATION
     BN_clear_free(r->n);
     BN_clear_free(r->e);
 #else
@@ -181,8 +186,7 @@ void RSA_free(RSA *r)
     RSA_PSS_PARAMS_free(r->pss);
     sk_RSA_PRIME_INFO_pop_free(r->prime_infos, ossl_rsa_multip_info_free);
 #endif
-    BN_BLINDING_free(r->blinding);
-    BN_BLINDING_free(r->mt_blinding);
+    ossl_rsa_free_blinding(r);
     OPENSSL_free(r);
 }
 
@@ -193,7 +197,7 @@ int RSA_up_ref(RSA *r)
     if (CRYPTO_UP_REF(&r->references, &i) <= 0)
         return 0;
 
-    REF_PRINT_COUNT("RSA", r);
+    REF_PRINT_COUNT("RSA", i, r);
     REF_ASSERT_ISNT(i < 2);
     return i > 1 ? 1 : 0;
 }
@@ -906,6 +910,56 @@ int ossl_rsa_get0_all_params(RSA *r, STACK_OF(BIGNUM_const) *primes,
     return 1;
 }
 
+#define safe_BN_num_bits(_k_)  (((_k_) == NULL) ? 0 : BN_num_bits((_k_)))
+int ossl_rsa_check_factors(RSA *r)
+{
+    int valid = 0;
+    int n, i, bits;
+    STACK_OF(BIGNUM_const) *factors = sk_BIGNUM_const_new_null();
+    STACK_OF(BIGNUM_const) *exps = sk_BIGNUM_const_new_null();
+    STACK_OF(BIGNUM_const) *coeffs = sk_BIGNUM_const_new_null();
+
+    if (factors == NULL || exps == NULL || coeffs == NULL)
+        goto done;
+
+    /*
+     * Simple sanity check for RSA key. All RSA key parameters
+     * must be less-than/equal-to RSA parameter n.
+     */
+    ossl_rsa_get0_all_params(r, factors, exps, coeffs);
+    n = safe_BN_num_bits(RSA_get0_n(r));
+
+    if (safe_BN_num_bits(RSA_get0_d(r)) > n)
+        goto done;
+
+    for (i = 0; i < sk_BIGNUM_const_num(exps); i++) {
+        bits = safe_BN_num_bits(sk_BIGNUM_const_value(exps, i));
+        if (bits > n)
+            goto done;
+    }
+
+    for (i = 0; i < sk_BIGNUM_const_num(factors); i++) {
+        bits = safe_BN_num_bits(sk_BIGNUM_const_value(factors, i));
+        if (bits > n)
+            goto done;
+    }
+
+    for (i = 0; i < sk_BIGNUM_const_num(coeffs); i++) {
+        bits = safe_BN_num_bits(sk_BIGNUM_const_value(coeffs, i));
+        if (bits > n)
+            goto done;
+    }
+
+    valid = 1;
+
+done:
+    sk_BIGNUM_const_free(factors);
+    sk_BIGNUM_const_free(exps);
+    sk_BIGNUM_const_free(coeffs);
+
+    return valid;
+}
+
 #ifndef FIPS_MODULE
 /* Helpers to set or get diverse hash algorithm names */
 static int int_set_rsa_md_name(EVP_PKEY_CTX *ctx,
@@ -1330,4 +1384,5 @@ int EVP_PKEY_CTX_set_rsa_keygen_primes(EVP_PKEY_CTX *ctx, int primes)
 
     return evp_pkey_ctx_set_params_strict(ctx, params);
 }
+
 #endif

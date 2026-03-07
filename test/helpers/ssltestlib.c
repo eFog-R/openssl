@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -7,8 +7,17 @@
  * https://www.openssl.org/source/license.html
  */
 
+/*
+ * We need access to the deprecated low level ENGINE APIs for legacy purposes
+ * when the deprecated calls are not hidden
+ */
+#ifndef OPENSSL_NO_DEPRECATED_3_0
+# define OPENSSL_SUPPRESS_DEPRECATED
+#endif
+
 #include <string.h>
 
+#include <openssl/engine.h>
 #include "internal/e_os.h"
 #include "internal/nelem.h"
 #include "ssltestlib.h"
@@ -16,6 +25,7 @@
 
 #if (!defined(OPENSSL_NO_KTLS) || !defined(OPENSSL_NO_QUIC)) && !defined(OPENSSL_NO_POSIX_IO) && !defined(OPENSSL_NO_SOCK)
 # define OSSL_USE_SOCKETS 1
+# include "internal/e_winsock.h"
 # include "internal/sockets.h"
 # include <openssl/bio.h>
 #endif
@@ -240,7 +250,7 @@ static int tls_dump_gets(BIO *bio, char *buf, int size)
 
 static int tls_dump_puts(BIO *bio, const char *str)
 {
-    return tls_dump_write(bio, str, strlen(str));
+    return tls_dump_write(bio, str, (int)strlen(str));
 }
 
 
@@ -526,6 +536,40 @@ int mempacket_move_packet(BIO *bio, int d, int s)
     return 1;
 }
 
+int mempacket_dup_last_packet(BIO *bio)
+{
+    MEMPACKET_TEST_CTX *ctx = BIO_get_data(bio);
+    MEMPACKET *thispkt, *duppkt;
+    int numpkts = sk_MEMPACKET_num(ctx->pkts);
+
+    /* We can only duplicate a packet if there is at least 1 pending */
+    if (numpkts <= 0)
+        return 0;
+
+    /* Get the last packet */
+    thispkt = sk_MEMPACKET_value(ctx->pkts, numpkts - 1);
+    if (thispkt == NULL)
+        return 0;
+
+    duppkt = OPENSSL_malloc(sizeof(*duppkt));
+    if (duppkt == NULL)
+        return 0;
+
+    *duppkt = *thispkt;
+    duppkt->data = OPENSSL_memdup(thispkt->data, thispkt->len);
+    if (duppkt->data == NULL) {
+        mempacket_free(duppkt);
+        return 0;
+    }
+    duppkt->num++;
+    if (sk_MEMPACKET_insert(ctx->pkts, duppkt, numpkts) <= 0) {
+        mempacket_free(duppkt);
+        return 0;
+    }
+
+    return 1;
+}
+
 int mempacket_test_inject(BIO *bio, const char *in, int inl, int pktnum,
                           int type)
 {
@@ -576,7 +620,7 @@ int mempacket_test_inject(BIO *bio, const char *in, int inl, int pktnum,
          */
         if (duprec && i != 2) {
             memcpy(thispkt->data, in + len, inl - len);
-            thispkt->len = inl - len;
+            thispkt->len = inl - (int)len;
         } else {
             memcpy(thispkt->data, in, inl);
             thispkt->len = inl;
@@ -704,7 +748,7 @@ static int mempacket_test_gets(BIO *bio, char *buf, int size)
 
 static int mempacket_test_puts(BIO *bio, const char *str)
 {
-    return mempacket_test_write(bio, str, strlen(str));
+    return mempacket_test_write(bio, str, (int)strlen(str));
 }
 
 static int always_retry_new(BIO *bi);
@@ -1180,9 +1224,14 @@ int create_ssl_objects(SSL_CTX *serverctx, SSL_CTX *clientctx, SSL **sssl,
     BIO_set_mem_eof_return(c_to_s_bio, -1);
 
     /* Up ref these as we are passing them to two SSL objects */
+    if (!BIO_up_ref(s_to_c_bio))
+        goto error;
+    if (!BIO_up_ref(c_to_s_bio)) {
+        BIO_free(s_to_c_bio);
+        goto error;
+    }
+
     SSL_set_bio(serverssl, c_to_s_bio, s_to_c_bio);
-    BIO_up_ref(s_to_c_bio);
-    BIO_up_ref(c_to_s_bio);
     SSL_set_bio(clientssl, s_to_c_bio, c_to_s_bio);
     *sssl = serverssl;
     *cssl = clientssl;
@@ -1209,12 +1258,13 @@ int create_ssl_objects(SSL_CTX *serverctx, SSL_CTX *clientctx, SSL **sssl,
  * has SSL_get_error() return the value in the |want| parameter. The connection
  * attempt could be restarted by a subsequent call to this function.
  */
-int create_bare_ssl_connection(SSL *serverssl, SSL *clientssl, int want,
-                               int read, int listen)
+int create_bare_ssl_connection_ex(SSL *serverssl, SSL *clientssl, int want,
+                                  int read, int listen, int *cm_count, int *sm_count)
 {
     int retc = -1, rets = -1, err, abortctr = 0, ret = 0;
     int clienterr = 0, servererr = 0;
     int isdtls = SSL_is_dtls(serverssl);
+    int icm_count = 0, ism_count = 0;
 #ifndef OPENSSL_NO_SOCK
     BIO_ADDR *peer = NULL;
 
@@ -1240,6 +1290,7 @@ int create_bare_ssl_connection(SSL *serverssl, SSL *clientssl, int want,
             retc = SSL_connect(clientssl);
             if (retc <= 0)
                 err = SSL_get_error(clientssl, retc);
+            icm_count++;
         }
 
         if (!clienterr && retc <= 0 && err != SSL_ERROR_WANT_READ) {
@@ -1265,12 +1316,14 @@ int create_bare_ssl_connection(SSL *serverssl, SSL *clientssl, int want,
                     listen = 0;
                     rets = 0;
                 }
+                ism_count++;
             } else
 #endif
             {
                 rets = SSL_accept(serverssl);
                 if (rets <= 0)
                     err = SSL_get_error(serverssl, rets);
+                ism_count++;
             }
         }
 
@@ -1296,6 +1349,7 @@ int create_bare_ssl_connection(SSL *serverssl, SSL *clientssl, int want,
                     TEST_info("Unexpected SSL_read() success!");
                     goto err;
                 }
+                ism_count++;
             }
             if (retc > 0 && rets <= 0) {
                 if (SSL_read(clientssl, buf, sizeof(buf)) > 0) {
@@ -1303,6 +1357,7 @@ int create_bare_ssl_connection(SSL *serverssl, SSL *clientssl, int want,
                     TEST_info("Unexpected SSL_read() success!");
                     goto err;
                 }
+                icm_count++;
             }
         }
         if (++abortctr == MAXLOOPS) {
@@ -1321,23 +1376,36 @@ int create_bare_ssl_connection(SSL *serverssl, SSL *clientssl, int want,
 
     ret = 1;
  err:
+    if (cm_count != NULL)
+        *cm_count = icm_count;
+    if (sm_count != NULL)
+        *sm_count = ism_count;
 #ifndef OPENSSL_NO_SOCK
     BIO_ADDR_free(peer);
 #endif
     return ret;
 }
 
+int create_bare_ssl_connection(SSL *serverssl, SSL *clientssl, int want,
+                               int read, int listen)
+{
+    return create_bare_ssl_connection_ex(serverssl, clientssl, want, read,
+                                         listen, NULL, NULL);
+}
+
 /*
  * Create an SSL connection including any post handshake NewSessionTicket
  * messages.
  */
-int create_ssl_connection(SSL *serverssl, SSL *clientssl, int want)
+int create_ssl_connection_ex(SSL *serverssl, SSL *clientssl, int want,
+                             int *cm_count, int *sm_count)
 {
     int i;
     unsigned char buf;
     size_t readbytes;
 
-    if (!create_bare_ssl_connection(serverssl, clientssl, want, 1, 0))
+    if (!create_bare_ssl_connection_ex(serverssl, clientssl, want, 1, 0,
+                                       cm_count, sm_count))
         return 0;
 
     /*
@@ -1347,15 +1415,22 @@ int create_ssl_connection(SSL *serverssl, SSL *clientssl, int want)
      */
     for (i = 0; i < 2; i++) {
         if (SSL_read_ex(clientssl, &buf, sizeof(buf), &readbytes) > 0) {
-            if (!TEST_ulong_eq(readbytes, 0))
+            if (!TEST_size_t_eq(readbytes, 0))
                 return 0;
         } else if (!TEST_int_eq(SSL_get_error(clientssl, 0),
                                 SSL_ERROR_WANT_READ)) {
             return 0;
         }
+        if (cm_count != NULL)
+            (*cm_count)++;
     }
 
     return 1;
+}
+
+int create_ssl_connection(SSL *serverssl, SSL *clientssl, int want)
+{
+   return create_ssl_connection_ex(serverssl, clientssl, want, NULL, NULL);
 }
 
 void shutdown_ssl_connection(SSL *serverssl, SSL *clientssl)
@@ -1450,4 +1525,28 @@ int ssl_ctx_add_large_cert_chain(OSSL_LIB_CTX *libctx, SSL_CTX *sctx,
     BIO_free(certbio);
     X509_free(chaincert);
     return ret;
+}
+
+ENGINE *load_dasync(void)
+{
+#if !defined(OPENSSL_NO_TLS1_2) && !defined(OPENSSL_NO_DYNAMIC_ENGINE)
+    ENGINE *e;
+
+    if (!TEST_ptr(e = ENGINE_by_id("dasync")))
+        return NULL;
+
+    if (!TEST_true(ENGINE_init(e))) {
+        ENGINE_free(e);
+        return NULL;
+    }
+
+    if (!TEST_true(ENGINE_register_ciphers(e))) {
+        ENGINE_free(e);
+        return NULL;
+    }
+
+    return e;
+#else
+    return NULL;
+#endif
 }

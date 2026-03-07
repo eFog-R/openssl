@@ -1,5 +1,5 @@
 /*
- * Copyright 2006-2024 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2006-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -321,9 +321,13 @@ static EVP_PKEY_CTX *int_ctx_new(OSSL_LIB_CTX *libctx,
     ret->engine = e;
     ret->pmeth = pmeth;
     ret->operation = EVP_PKEY_OP_UNDEFINED;
+
+    if (pkey != NULL && !EVP_PKEY_up_ref(pkey)) {
+        EVP_PKEY_CTX_free(ret);
+        return NULL;
+    }
+
     ret->pkey = pkey;
-    if (pkey != NULL)
-        EVP_PKEY_up_ref(pkey);
 
     if (pmeth != NULL && pmeth->init != NULL) {
         if (pmeth->init(ret) <= 0) {
@@ -461,8 +465,9 @@ EVP_PKEY_CTX *EVP_PKEY_CTX_dup(const EVP_PKEY_CTX *pctx)
     if (rctx == NULL)
         return NULL;
 
-    if (pctx->pkey != NULL)
-        EVP_PKEY_up_ref(pctx->pkey);
+    if (pctx->pkey != NULL && !EVP_PKEY_up_ref(pctx->pkey))
+        goto err;
+
     rctx->pkey = pctx->pkey;
     rctx->operation = pctx->operation;
     rctx->libctx = pctx->libctx;
@@ -474,6 +479,12 @@ EVP_PKEY_CTX *EVP_PKEY_CTX_dup(const EVP_PKEY_CTX *pctx)
             goto err;
     }
     rctx->legacy_keytype = pctx->legacy_keytype;
+
+    if (pctx->keymgmt != NULL) {
+        if (!EVP_KEYMGMT_up_ref(pctx->keymgmt))
+            goto err;
+        rctx->keymgmt = pctx->keymgmt;
+    }
 
     if (EVP_PKEY_CTX_IS_DERIVE_OP(pctx)) {
         if (pctx->op.kex.exchange != NULL) {
@@ -569,14 +580,18 @@ EVP_PKEY_CTX *EVP_PKEY_CTX_dup(const EVP_PKEY_CTX *pctx)
     rctx->engine = pctx->engine;
 # endif
 
-    if (pctx->peerkey != NULL)
-        EVP_PKEY_up_ref(pctx->peerkey);
+    if (pctx->peerkey != NULL && !EVP_PKEY_up_ref(pctx->peerkey))
+        goto err;
+
     rctx->peerkey = pctx->peerkey;
 
     if (pctx->pmeth == NULL) {
         if (rctx->operation == EVP_PKEY_OP_UNDEFINED) {
             EVP_KEYMGMT *tmp_keymgmt = pctx->keymgmt;
             void *provkey;
+
+            if (pctx->pkey == NULL)
+                return rctx;
 
             provkey = evp_pkey_export_to_provider(pctx->pkey, pctx->libctx,
                                                   &tmp_keymgmt, pctx->propquery);
@@ -647,7 +662,7 @@ const EVP_PKEY_METHOD *EVP_PKEY_meth_get0(size_t idx)
     idx -= OSSL_NELEM(standard_methods);
     if (idx >= (size_t)sk_EVP_PKEY_METHOD_num(app_pkey_methods))
         return NULL;
-    return sk_EVP_PKEY_METHOD_value(app_pkey_methods, idx);
+    return sk_EVP_PKEY_METHOD_value(app_pkey_methods, (int)idx);
 }
 #endif
 
@@ -695,8 +710,9 @@ int EVP_PKEY_CTX_set_params(EVP_PKEY_CTX *ctx, const OSSL_PARAM *params)
                 ctx->op.encap.kem->set_ctx_params(ctx->op.encap.algctx,
                                                   params);
         break;
-#ifndef FIPS_MODULE
     case EVP_PKEY_STATE_UNKNOWN:
+        break;
+#ifndef FIPS_MODULE
     case EVP_PKEY_STATE_LEGACY:
         return evp_pkey_ctx_set_params_to_ctrl(ctx, params);
 #endif
@@ -732,13 +748,22 @@ int EVP_PKEY_CTX_get_params(EVP_PKEY_CTX *ctx, OSSL_PARAM *params)
             return
                 ctx->op.encap.kem->get_ctx_params(ctx->op.encap.algctx,
                                                   params);
+        if (EVP_PKEY_CTX_IS_GEN_OP(ctx)
+            && ctx->keymgmt != NULL
+            && ctx->keymgmt->gen_get_params != NULL)
+            return
+                evp_keymgmt_gen_get_params(ctx->keymgmt, ctx->op.keymgmt.genctx,
+                                           params);
+        break;
+    case EVP_PKEY_STATE_UNKNOWN:
         break;
 #ifndef FIPS_MODULE
-    case EVP_PKEY_STATE_UNKNOWN:
     case EVP_PKEY_STATE_LEGACY:
         return evp_pkey_ctx_get_params_to_ctrl(ctx, params);
 #endif
     }
+    ERR_raise_data(ERR_LIB_EVP, EVP_R_PROVIDER_GET_CTX_PARAMS_NOT_SUPPORTED,
+                   "EVP_PKEY_OP=0x%x", ctx->operation);
     return 0;
 }
 
@@ -776,6 +801,13 @@ const OSSL_PARAM *EVP_PKEY_CTX_gettable_params(const EVP_PKEY_CTX *ctx)
         provctx = ossl_provider_ctx(EVP_KEM_get0_provider(ctx->op.encap.kem));
         return ctx->op.encap.kem->gettable_ctx_params(ctx->op.encap.algctx,
                                                       provctx);
+    }
+    if (EVP_PKEY_CTX_IS_GEN_OP(ctx)
+            && ctx->keymgmt != NULL
+            && ctx->keymgmt->gen_gettable_params != NULL) {
+        provctx = ossl_provider_ctx(EVP_KEYMGMT_get0_provider(ctx->keymgmt));
+        return ctx->keymgmt->gen_gettable_params(ctx->op.keymgmt.genctx,
+                                                 provctx);
     }
     return NULL;
 }
@@ -1008,6 +1040,7 @@ static int evp_pkey_ctx_add1_octet_string(EVP_PKEY_CTX *ctx, int fallback,
                                           int datalen)
 {
     OSSL_PARAM os_params[2];
+    const OSSL_PARAM *gettables;
     unsigned char *info = NULL;
     size_t info_len = 0;
     size_t info_alloc = 0;
@@ -1031,6 +1064,12 @@ static int evp_pkey_ctx_add1_octet_string(EVP_PKEY_CTX *ctx, int fallback,
         return 1;
     }
 
+    /* Check for older provider that doesn't support getting this parameter */
+    gettables = EVP_PKEY_CTX_gettable_params(ctx);
+    if (gettables == NULL || OSSL_PARAM_locate_const(gettables, param) == NULL)
+        return evp_pkey_ctx_set1_octet_string(ctx, fallback, param, op, ctrl,
+                                              data, datalen);
+
     /* Get the original value length */
     os_params[0] = OSSL_PARAM_construct_octet_string(param, NULL, 0);
     os_params[1] = OSSL_PARAM_construct_end();
@@ -1038,9 +1077,9 @@ static int evp_pkey_ctx_add1_octet_string(EVP_PKEY_CTX *ctx, int fallback,
     if (!EVP_PKEY_CTX_get_params(ctx, os_params))
         return 0;
 
-    /* Older provider that doesn't support getting this parameter */
+    /* This should not happen but check to be sure. */
     if (os_params[0].return_size == OSSL_PARAM_UNMODIFIED)
-        return evp_pkey_ctx_set1_octet_string(ctx, fallback, param, op, ctrl, data, datalen);
+        return 0;
 
     info_alloc = os_params[0].return_size + datalen;
     if (info_alloc == 0)
@@ -1567,7 +1606,7 @@ int EVP_PKEY_CTX_str2ctrl(EVP_PKEY_CTX *ctx, int cmd, const char *str)
     len = strlen(str);
     if (len > INT_MAX)
         return -1;
-    return ctx->pmeth->ctrl(ctx, cmd, len, (void *)str);
+    return ctx->pmeth->ctrl(ctx, cmd, (int)len, (void *)str);
 }
 
 int EVP_PKEY_CTX_hex2ctrl(EVP_PKEY_CTX *ctx, int cmd, const char *hex)

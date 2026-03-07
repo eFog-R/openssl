@@ -1,5 +1,5 @@
 #! /usr/bin/env perl
-# Copyright 2016-2021 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.
 #
 # Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
@@ -10,15 +10,18 @@ use strict;
 use OpenSSL::Test qw/:DEFAULT cmdstr srctop_file bldtop_dir/;
 use OpenSSL::Test::Utils;
 use TLSProxy::Proxy;
+use Cwd qw(abs_path);
 
 my $test_name = "test_sslsigalgs";
 setup($test_name);
 
+$ENV{OPENSSL_MODULES} = abs_path(bldtop_dir("test"));
+
 plan skip_all => "TLSProxy isn't usable on $^O"
     if $^O =~ /^(VMS)$/;
 
-plan skip_all => "$test_name needs the dynamic engine feature enabled"
-    if disabled("engine") || disabled("dynamic-engine");
+plan skip_all => "$test_name needs the module feature enabled"
+    if disabled("module");
 
 plan skip_all => "$test_name needs the sock feature enabled"
     if disabled("sock");
@@ -47,6 +50,18 @@ use constant {
     UNRECOGNIZED_SIGALGS_CERT => 10,
     UNRECOGNIZED_SIGALG => 11
 };
+
+srand(70);
+sub randcase {
+    my ($names) = @_;
+    my @ret;
+    foreach my $name (split(/:/, $names)) {
+        my ($alg, $rest) = split(/(?=[+])/, $name, 2);
+        $alg =~ s{([a-zA-Z])}{chr(ord($1)^(int(rand(2.0)) * 32))}eg;
+        push @ret, $alg . ($rest // "");
+    }
+    return join(":", @ret);
+}
 
 #Note: Throughout this test we override the default ciphersuites where TLSv1.2
 #      is expected to ensure that a ServerKeyExchange message is sent that uses
@@ -114,7 +129,7 @@ SKIP: {
     #Test 8: Sending a valid sig algs list but not including a sig type that
     #        matches the certificate should fail in TLSv1.3.
     $proxy->clear();
-    $proxy->clientflags("-sigalgs ECDSA+SHA256");
+    $proxy->clientflags("-sigalgs ".randcase("ECDSA+SHA256"));
     $proxy->filter(undef);
     $proxy->start();
     ok(TLSProxy::Message->fail, "No matching TLSv1.3 sigalgs");
@@ -207,7 +222,7 @@ SKIP: {
     #         when we have an API capable of configuring the TLSv1.3 sig algs
     $proxy->clear();
     $testtype = PSS_ONLY_SIG_ALGS;
-    $proxy->clientflags("-no_tls1_3 -sigalgs RSA+SHA256");
+    $proxy->clientflags("-no_tls1_3 -sigalgs ".randcase("RSA+SHA256"));
     $proxy->ciphers("ECDHE-RSA-AES128-SHA");
     $proxy->start();
     ok(TLSProxy::Message->fail, "Sigalg we did not send in TLSv1.2");
@@ -215,7 +230,7 @@ SKIP: {
     #Test 18: Sending a valid sig algs list but not including a sig type that
     #         matches the certificate should fail in TLSv1.2
     $proxy->clear();
-    $proxy->clientflags("-no_tls1_3 -sigalgs ECDSA+SHA256");
+    $proxy->clientflags("-no_tls1_3 -sigalgs ".randcase("ECDSA+SHA256"));
     $proxy->ciphers("ECDHE-RSA-AES128-SHA");
     $proxy->filter(undef);
     $proxy->start();

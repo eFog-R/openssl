@@ -3,6 +3,8 @@
 ##
 ## {- join("\n## ", @autowarntext) -}
 {-
+     use Time::Piece;
+
      use OpenSSL::Util;
 
      our $makedep_scheme = $config{makedep_scheme};
@@ -74,6 +76,15 @@ FIPSKEY={- $config{FIPSKEY} -}
 
 VERSION={- "$config{full_version}" -}
 VERSION_NUMBER={- "$config{version}" -}
+RELEASE_DATE={- my $t = localtime;
+		if ($config{"release_date"}) {
+			# Provide the user with a more meaningful error message
+			# than the default internal parsing error from
+			# `Time::Piece->strptime(..)`.
+			eval { $t = Time::Piece->strptime($config{"release_date"}, "%d %b %Y"); } ||
+				die "Parsing \$config{release_date} ('$config{release_date}') failed: $@";
+		}
+		$t->strftime("%Y-%m-%d") -}
 MAJOR={- $config{major} -}
 MINOR={- $config{minor} -}
 SHLIB_VERSION_NUMBER={- $config{shlib_version} -}
@@ -135,7 +146,7 @@ GENERATED_PODS={- # common0.tmpl provides @generated
                        fill_lines(" ", $COLUMNS - 15,
                                   map { my $x = $_;
                                         (
-                                          grep { 
+                                          grep {
                                                  $unified_info{attributes}->{depends}
                                                  ->{$x}->{$_}->{pod} // 0
                                                }
@@ -373,6 +384,7 @@ CFLAGS={- join(' ', @{$config{CFLAGS}}) -}
 CXXFLAGS={- join(' ', @{$config{CXXFLAGS}}) -}
 LDFLAGS= {- join(' ', @{$config{LDFLAGS}}) -}
 EX_LIBS= {- join(' ', @{$config{LDLIBS}}) -}
+OBJCOPY={- $config{OBJCOPY} -}
 
 MAKEDEPEND={- $config{makedepcmd} -}
 
@@ -530,9 +542,19 @@ LANG=C
 {- dependmagic('build_sw', 'Build all the software (default target)'); -}: build_libs_nodep build_modules_nodep build_programs_nodep link-utils
 {- dependmagic('build_libs', 'Build the libraries libssl and libcrypto'); -}: build_libs_nodep
 {- dependmagic('build_modules', 'Build the modules (i.e. providers and engines)'); -}: build_modules_nodep
-{- dependmagic('build_programs', 'Build the openssl executables and scripts'); -}: build_programs_nodep
+{- dependmagic('build_programs', 'Build the openssl executables, scripts and all other programs as configured (e.g. tests or demos)'); -}: build_programs_nodep
+{- dependmagic('build_inst_sw', 'Build all the software to be installed'); -}: build_libs_nodep build_modules_nodep build_inst_programs_nodep link-utils
+{- dependmagic('build_inst_programs', 'Build only the installable openssl executables and scripts'); -}: build_inst_programs_nodep
 
 all: build_sw {- "build_docs" if !$disabled{docs}; -} ## Build software and documentation
+debuginfo: $(SHLIBS)
+	@set -e; for i in $(SHLIBS); do \
+		$(OBJCOPY) --only-keep-debug $$i $$i.debug; \
+		$(OBJCOPY) --strip-debug --add-gnu-debuglink=$$i.debug $$i; \
+	done;
+
+cov-report: $(SHLIBS)
+	@set -e; gcovr -r . --txt-metric=branch --html --html-details -o openssl-metrics.html
 
 ##@ Documentation
 build_generated_pods: $(GENERATED_PODS)
@@ -544,6 +566,7 @@ build_generated: $(GENERATED_MANDATORY)
 build_libs_nodep: $(LIBS) {- join(" ",map { platform->sharedlib_simple($_) // platform->sharedlib_import($_) // platform->sharedlib($_) // () } @{$unified_info{libraries}}) -}
 build_modules_nodep: $(MODULES)
 build_programs_nodep: $(PROGRAMS) $(SCRIPTS)
+build_inst_programs_nodep: $(INSTALL_PROGRAMS) $(SCRIPTS)
 
 # Kept around for backward compatibility
 build_apps build_tests: build_programs
@@ -627,7 +650,7 @@ clean: libclean ## Clean the workspace, keep the configuration
 	$(RM) tags TAGS doc-nits md-nits
 	$(RM) -r test/test-runs
 	$(RM) providers/fips*.new
-	-find . -type l \! -name '.*' -exec $(RM) {} \;
+	-find . -type l \! -name '.*' \! -wholename './pkcs11-provider/*' -exec $(RM) {} \;
 
 distclean: clean ## Clean and remove the configuration
 	$(RM) include/openssl/configuration.h
@@ -644,7 +667,11 @@ depend: Makefile
 # Install helper targets #############################################
 ##@ Installation
 
-install: install_sw install_ssldirs {- "install_docs" if !$disabled{docs}; -} {- $disabled{fips} ? "" : "install_fips" -} ## Install software and documentation, create OpenSSL directories
+install: Makefile ## Install software and documentation, create OpenSSL directories
+	$(MAKE) install_sw
+	$(MAKE) install_ssldirs
+	{- "\$(MAKE) install_docs" if !$disabled{docs} -}
+	{- "\$(MAKE) install_fips" if !$disabled{fips} -}
 
 uninstall: {- "uninstall_docs" if !$disabled{docs}; -} uninstall_sw {- $disabled{fips} ? "" : "uninstall_fips" -} ## Uninstall software and documentation
 
@@ -658,7 +685,7 @@ uninstall_docs: uninstall_man_docs uninstall_html_docs ## Uninstall manpages and
 	$(RM) -r "$(DESTDIR)$(DOCDIR)"
 
 {- output_off() if $disabled{fips}; "" -}
-install_fips: build_sw $(INSTALL_FIPSMODULECONF)
+install_fips: build_inst_sw $(INSTALL_FIPSMODULECONF)
 	@[ -n "$(INSTALLTOP)" ] || (echo INSTALLTOP should not be empty; exit 1)
 	@$(PERL) $(SRCDIR)/util/mkdir-p.pl "$(DESTDIR)$(MODULESDIR)"
 	@$(PERL) $(SRCDIR)/util/mkdir-p.pl "$(DESTDIR)$(OPENSSLDIR)"
@@ -803,12 +830,12 @@ install_dev: install_runtime_libs
 		cp $$e "$(DESTDIR)$(PKGCONFIGDIR)/$$fn"; \
 		chmod 644 "$(DESTDIR)$(PKGCONFIGDIR)/$$fn"; \
 	done
-	@$(PERL) $(SRCDIR)/util/mkdir-p.pl $(DESTDIR)$(CMAKECONFIGDIR)
+	@$(PERL) $(SRCDIR)/util/mkdir-p.pl "$(DESTDIR)$(CMAKECONFIGDIR)"
 	@for e in $(INSTALL_EXPORTERS_CMAKE); do \
 		fn=`basename $$e`; \
 		$(ECHO) "install $$e -> $(DESTDIR)$(CMAKECONFIGDIR)/$$fn"; \
-		cp $$e $(DESTDIR)$(CMAKECONFIGDIR)/$$fn; \
-		chmod 644 $(DESTDIR)$(CMAKECONFIGDIR)/$$fn; \
+		cp $$e "$(DESTDIR)$(CMAKECONFIGDIR)/$$fn"; \
+		chmod 644 "$(DESTDIR)$(CMAKECONFIGDIR)/$$fn"; \
 	done
 
 uninstall_dev: uninstall_runtime_libs
@@ -943,7 +970,7 @@ install_runtime_libs: build_libs
 		: {- output_on() if windowsdll(); "" -}; \
 	done
 
-install_programs: install_runtime_libs build_programs
+install_programs: install_runtime_libs build_inst_programs
 	@[ -n "$(INSTALLTOP)" ] || (echo INSTALLTOP should not be empty; exit 1)
 	@$(PERL) $(SRCDIR)/util/mkdir-p.pl "$(DESTDIR)$(bindir)"
 	@$(ECHO) "*** Installing runtime programs"
@@ -1167,7 +1194,7 @@ generate_buildinfo: generate_doc_buildinfo
 
 .PHONY: doc-nits md-nits
 doc-nits: build_generated_pods ## Evaluate OpenSSL documentation
-	$(PERL) $(SRCDIR)/util/find-doc-nits -c -n -l -e
+	$(PERL) $(SRCDIR)/util/find-doc-nits -c -n -l -e -i -a
 
 # This uses "mdl", the markdownlint application, which is written in ruby.
 # The source is at https://github.com/markdownlint/markdownlint
@@ -1332,8 +1359,7 @@ errors:
            include/internal/asn1.h
            include/internal/sslconf.h );
    my @cryptoskipheaders = ( @sslheaders_tmpl,
-       qw( include/openssl/asn1_mac.h
-           include/openssl/conf_api.h
+       qw( include/openssl/conf_api.h
            include/openssl/ebcdic.h
            include/openssl/opensslconf.h
            include/openssl/symhacks.h ) );
@@ -1407,10 +1433,10 @@ ordinals: build_generated
 test_ordinals:
 	"$(MAKE)" run_tests TESTS=test_ordinals
 
-tags TAGS: FORCE
+tags TAGS: FORCE build_generated
 	rm -f TAGS tags
 	-( cd $(SRCDIR); util/ctags.sh )
-	-etags `find . -name '*.[ch]' -o -name '*.pm'`
+	-etags `find . -name '*.[ch]' -o -name '*.pm' -o -name '*.inc'`
 
 providers/fips.checksum.new: providers/fips.module.sources.new
 	@which unifdef > /dev/null || \
@@ -1560,7 +1586,8 @@ EOF
           return <<"EOF";
 $args{src}: $pod
 	pod2man --name=$name --section=$section\$(MANSUFFIX) --center=OpenSSL \\
-		--release=\$(VERSION) $pod >\$\@
+		--date=\$(RELEASE_DATE) --release=\$(VERSION) \\
+		$pod >\$\@
 EOF
       } elsif (platform->isdef($args{src})) {
           #
@@ -1656,7 +1683,9 @@ EOF
 
           return <<"EOF";
 $args{src}: $gen0 $deps
+	if [ -r "\$@" ]; then chmod u+w \$@; fi
 	\$(PERL)$perlmodules "$dofile" "-o$target{build_file}" $gen0$gen_args > \$@
+	chmod a-w \$@
 EOF
       } elsif (grep { $_ eq $gen0 } @{$unified_info{programs}}) {
           #
@@ -1740,7 +1769,7 @@ EOF
       } elsif ($makedep_scheme eq 'gcc' && !grep /\.rc$/, @srcs) {
           $recipe .= <<"EOF";
 $obj: $deps
-	$cmd $incs $defs $cmdflags -MMD -MF $dep.tmp -MT \$\@ -c -o \$\@ $srcs
+	$cmd $incs $defs $cmdflags -MMD -MF $dep.tmp -c -o \$\@ $srcs
 	\@touch $dep.tmp
 	\@if cmp $dep.tmp $dep > /dev/null 2> /dev/null; then \\
 		rm -f $dep.tmp; \\
@@ -2013,10 +2042,11 @@ EOF
                            rel2abs($config{builddir}));
       return <<"EOF";
 $script: $sources configdata.pm
+	if [ -r "$script" ]; then chmod u+w $script; fi
 	\$(RM) "$script"
 	\$(PERL) "-I\$(BLDDIR)" -Mconfigdata "$dofile" \\
 	    "-o$target{build_file}" $sources > "$script"
-	chmod a+x $script
+	chmod a+x,a-w $script
 EOF
   }
   sub generatedir {

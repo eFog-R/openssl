@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2017-2025 The OpenSSL Project Authors. All Rights Reserved.
  * Copyright 2017 Ribose Inc. All Rights Reserved.
  * Ported from Ribose contributions from Botan.
  *
@@ -160,7 +160,7 @@ static BIGNUM *sm2_compute_msg_hash(const EVP_MD *digest,
     OSSL_LIB_CTX *libctx = ossl_ec_key_get_libctx(key);
     const char *propq = ossl_ec_key_get0_propq(key);
 
-    if (md_size < 0) {
+    if (md_size <= 0) {
         ERR_raise(ERR_LIB_SM2, SM2_R_INVALID_DIGEST);
         goto done;
     }
@@ -220,6 +220,10 @@ static ECDSA_SIG *sm2_sig_gen(const EC_KEY *key, const BIGNUM *e)
     BIGNUM *tmp = NULL;
     OSSL_LIB_CTX *libctx = ossl_ec_key_get_libctx(key);
 
+    if (dA == NULL) {
+        ERR_raise(ERR_LIB_SM2, SM2_R_INVALID_PRIVATE_KEY);
+        goto done;
+    }
     kG = EC_POINT_new(group);
     if (kG == NULL) {
         ERR_raise(ERR_LIB_SM2, ERR_R_EC_LIB);
@@ -338,17 +342,21 @@ static int sm2_sig_verify(const EC_KEY *key, const ECDSA_SIG *sig,
     OSSL_LIB_CTX *libctx = ossl_ec_key_get_libctx(key);
 
     ctx = BN_CTX_new_ex(libctx);
-    pt = EC_POINT_new(group);
-    if (ctx == NULL || pt == NULL) {
-        ERR_raise(ERR_LIB_SM2, ERR_R_EC_LIB);
+    if (ctx == NULL) {
+        ERR_raise(ERR_LIB_SM2, ERR_R_BN_LIB);
         goto done;
     }
-
     BN_CTX_start(ctx);
     t = BN_CTX_get(ctx);
     x1 = BN_CTX_get(ctx);
     if (x1 == NULL) {
         ERR_raise(ERR_LIB_SM2, ERR_R_BN_LIB);
+        goto done;
+    }
+
+    pt = EC_POINT_new(group);
+    if (pt == NULL) {
+        ERR_raise(ERR_LIB_SM2, ERR_R_EC_LIB);
         goto done;
     }
 

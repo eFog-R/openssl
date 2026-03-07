@@ -1,11 +1,16 @@
 /*
- * Copyright 1995-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
  */
+
+/*
+ * because of EVP_PKEY_asn1_find deprecation
+ */
+#define OPENSSL_SUPPRESS_DEPRECATED
 
 #include <stdio.h>
 #include "internal/cryptlib.h"
@@ -28,8 +33,7 @@ int X509_print_fp(FILE *fp, X509 *x)
     return X509_print_ex_fp(fp, x, XN_FLAG_COMPAT, X509_FLAG_COMPAT);
 }
 
-int X509_print_ex_fp(FILE *fp, X509 *x, unsigned long nmflag,
-                     unsigned long cflag)
+int X509_print_ex_fp(FILE *fp, X509 *x, unsigned long nmflag, unsigned long cflag)
 {
     BIO *b;
     int ret;
@@ -45,20 +49,18 @@ int X509_print_ex_fp(FILE *fp, X509 *x, unsigned long nmflag,
 }
 #endif
 
-int X509_print(BIO *bp, X509 *x)
+int X509_print(BIO *bp, const X509 *x)
 {
     return X509_print_ex(bp, x, XN_FLAG_COMPAT, X509_FLAG_COMPAT);
 }
 
-int X509_print_ex(BIO *bp, X509 *x, unsigned long nmflags,
-                  unsigned long cflag)
+int X509_print_ex(BIO *bp, const X509 *x, unsigned long nmflags, unsigned long cflag)
 {
     long l;
-    int ret = 0, i;
+    int ret = 0;
     char mlch = ' ';
     int nmindent = 0, printok = 0;
     EVP_PKEY *pkey = NULL;
-    const char *neg;
 
     if ((nmflags & XN_FLAG_SEP_MASK) == XN_FLAG_SEP_MULTILINE) {
         mlch = '\n';
@@ -89,37 +91,10 @@ int X509_print_ex(BIO *bp, X509 *x, unsigned long nmflags,
 
         if (BIO_write(bp, "        Serial Number:", 22) <= 0)
             goto err;
-
-        if (bs->length <= (int)sizeof(long)) {
-                ERR_set_mark();
-                l = ASN1_INTEGER_get(bs);
-                ERR_pop_to_mark();
-        } else {
-            l = -1;
-        }
-        if (l != -1) {
-            unsigned long ul;
-            if (bs->type == V_ASN1_NEG_INTEGER) {
-                ul = 0 - (unsigned long)l;
-                neg = "-";
-            } else {
-                ul = l;
-                neg = "";
-            }
-            if (BIO_printf(bp, " %s%lu (%s0x%lx)\n", neg, ul, neg, ul) <= 0)
-                goto err;
-        } else {
-            neg = (bs->type == V_ASN1_NEG_INTEGER) ? " (Negative)" : "";
-            if (BIO_printf(bp, "\n%12s%s", "", neg) <= 0)
-                goto err;
-
-            for (i = 0; i < bs->length; i++) {
-                if (BIO_printf(bp, "%02x%c", bs->data[i],
-                               ((i + 1 == bs->length) ? '\n' : ':')) <= 0)
-                    goto err;
-            }
-        }
-
+        if (ossl_serial_number_print(bp, bs, 12) != 0)
+            goto err;
+        if (BIO_puts(bp, "\n") <= 0)
+            goto err;
     }
 
     if (!(cflag & X509_FLAG_NO_SIGNAME)) {
@@ -223,7 +198,7 @@ int X509_print_ex(BIO *bp, X509 *x, unsigned long nmflags,
     return ret;
 }
 
-int X509_ocspid_print(BIO *bp, X509 *x)
+int X509_ocspid_print(BIO *bp, const X509 *x)
 {
     unsigned char *der = NULL;
     unsigned char *dertmp;
@@ -247,7 +222,8 @@ int X509_ocspid_print(BIO *bp, X509 *x)
         goto err;
     if ((der = dertmp = OPENSSL_malloc(derlen)) == NULL)
         goto err;
-    i2d_X509_NAME(subj, &dertmp);
+    if (i2d_X509_NAME(subj, &dertmp) < 0)
+        goto err;
 
     md = EVP_MD_fetch(x->libctx, SN_sha1, x->propq);
     if (md == NULL)
@@ -315,7 +291,9 @@ int X509_signature_dump(BIO *bp, const ASN1_STRING *sig, int indent)
 int X509_signature_print(BIO *bp, const X509_ALGOR *sigalg,
                          const ASN1_STRING *sig)
 {
+#ifndef OPENSSL_NO_DEPRECATED_3_6
     int sig_nid;
+#endif
     int indent = 4;
     if (BIO_printf(bp, "%*sSignature Algorithm: ", indent, "") <= 0)
         return 0;
@@ -324,6 +302,7 @@ int X509_signature_print(BIO *bp, const X509_ALGOR *sigalg,
 
     if (sig && BIO_printf(bp, "\n%*sSignature Value:", indent, "") <= 0)
         return 0;
+#ifndef OPENSSL_NO_DEPRECATED_3_6
     sig_nid = OBJ_obj2nid(sigalg->algorithm);
     if (sig_nid != NID_undef) {
         int pkey_nid, dig_nid;
@@ -334,6 +313,7 @@ int X509_signature_print(BIO *bp, const X509_ALGOR *sigalg,
                 return ameth->sig_print(bp, sigalg, sig, indent + 4, 0);
         }
     }
+#endif
     if (BIO_write(bp, "\n", 1) != 1)
         return 0;
     if (sig)
@@ -341,7 +321,7 @@ int X509_signature_print(BIO *bp, const X509_ALGOR *sigalg,
     return 1;
 }
 
-int X509_aux_print(BIO *out, X509 *x, int indent)
+int X509_aux_print(BIO *out, const X509 *x, int indent)
 {
     char oidstr[80], first;
     STACK_OF(ASN1_OBJECT) *trust, *reject;
@@ -530,4 +510,50 @@ int X509_STORE_CTX_print_verify_cb(int ok, X509_STORE_CTX *ctx)
     }
 
     return ok;
+}
+
+/*
+ * Prints serial numbers in decimal and hexadecimal. The indent argument is only
+ * used if the serial number is too large to fit in an int64_t.
+ */
+int ossl_serial_number_print(BIO *out, const ASN1_INTEGER *bs, int indent)
+{
+    int i, ok;
+    int64_t l;
+    uint64_t ul;
+    const char *neg;
+
+    if (bs->length == 0) {
+        if (BIO_puts(out, " (Empty)") <= 0)
+            return -1;
+        return 0;
+    }
+
+    ERR_set_mark();
+    ok = ASN1_INTEGER_get_int64(&l, bs);
+    ERR_pop_to_mark();
+
+    if (ok) { /* Reading an int64_t succeeded: print decimal and hex. */
+        if (bs->type == V_ASN1_NEG_INTEGER) {
+            ul = 0 - (uint64_t)l;
+            neg = "-";
+        } else {
+            ul = l;
+            neg = "";
+        }
+        if (BIO_printf(out, " %s%ju (%s0x%jx)", neg, ul, neg, ul) <= 0)
+            return -1;
+    } else { /* Reading an int64_t failed: just print hex. */
+        neg = (bs->type == V_ASN1_NEG_INTEGER) ? " (Negative)" : "";
+        if (BIO_printf(out, "\n%*s%s", indent, "", neg) <= 0)
+            return -1;
+
+        for (i = 0; i < bs->length - 1; i++) {
+            if (BIO_printf(out, "%02x%c", bs->data[i], ':') <= 0)
+                return -1;
+        }
+        if (BIO_printf(out, "%02x", bs->data[i]) <= 0)
+            return -1;
+    }
+    return 0;
 }

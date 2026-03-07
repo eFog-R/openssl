@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -18,8 +18,10 @@
 #endif
 
 #include <ctype.h>
+#include "internal/e_os.h"
 #include "http_server.h"
-#include "internal/sockets.h"
+#include "internal/sockets.h" /* for openssl_fdset() */
+
 #include <openssl/err.h>
 #include <openssl/trace.h>
 #include <openssl/rand.h>
@@ -90,7 +92,8 @@ void spawn_loop(const char *prog)
                   strerror(errno));
         exit(1);
     }
-    kidpids = app_malloc(n_responders * sizeof(*kidpids), "child PID array");
+    kidpids = app_malloc_array(n_responders, sizeof(*kidpids),
+                               "child PID array");
     for (i = 0; i < n_responders; ++i)
         kidpids[i] = 0;
 
@@ -202,8 +205,9 @@ BIO *http_server_init(const char *prog, const char *port, int verb)
         goto err;
     acbio = BIO_new(BIO_s_accept());
     if (acbio == NULL
-        || BIO_set_bind_mode(acbio, BIO_BIND_REUSEADDR) < 0
-        || BIO_set_accept_name(acbio, name) < 0) {
+        || BIO_set_accept_ip_family(acbio, BIO_FAMILY_IPANY) <= 0 /* IPv4/6 */
+        || BIO_set_bind_mode(acbio, BIO_BIND_REUSEADDR) <= 0
+        || BIO_set_accept_name(acbio, name) <= 0) {
         log_HTTP(prog, LOG_ERR, "error setting up accept BIO");
         goto err;
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2024 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  * Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved
  * Copyright 2005 Nokia. All rights reserved.
  *
@@ -299,9 +299,9 @@ static int cb_server_alpn(SSL *s, const unsigned char **out,
         abort();
     }
 
-    if (SSL_select_next_proto
-        ((unsigned char **)out, outlen, protos, protos_len, in,
-         inlen) != OPENSSL_NPN_NEGOTIATED) {
+    if (SSL_select_next_proto((unsigned char **)out, outlen, protos,
+                              (unsigned int)protos_len,
+                              in, inlen) != OPENSSL_NPN_NEGOTIATED) {
         OPENSSL_free(protos);
         return SSL_TLSEXT_ERR_NOACK;
     }
@@ -903,8 +903,7 @@ int main(int argc, char *argv[])
     int ret = EXIT_FAILURE;
     int client_auth = 0;
     int server_auth = 0, i;
-    struct app_verify_arg app_verify_arg =
-        { APP_CALLBACK_STRING, 0 };
+    struct app_verify_arg app_verify_arg = { APP_CALLBACK_STRING, 0 };
     SSL_CTX *c_ctx = NULL;
     const SSL_METHOD *meth = NULL;
     SSL *c_ssl = NULL;
@@ -1057,7 +1056,7 @@ int main(int argc, char *argv[])
             bytes = atol(*(++argv));
             if (bytes == 0L)
                 bytes = 1L;
-            i = strlen(argv[0]);
+            i = (int)strlen(argv[0]);
             if (argv[0][i - 1] == 'k')
                 bytes *= 1024L;
             if (argv[0][i - 1] == 'm')
@@ -1346,7 +1345,7 @@ int main(int argc, char *argv[])
         int j;
         printf("Available compression methods:");
         for (j = 0; j < n; j++) {
-            SSL_COMP *c = sk_SSL_COMP_value(ssl_comp_methods, j);
+            const SSL_COMP *c = sk_SSL_COMP_value(ssl_comp_methods, j);
             printf("  %s:%d", SSL_COMP_get0_name(c), SSL_COMP_get_id(c));
         }
         printf("\n");
@@ -1736,7 +1735,7 @@ int main(int argc, char *argv[])
             goto end;
         }
         /* Returns 0 on success!! */
-        if (SSL_CTX_set_alpn_protos(c_ctx, alpn, alpn_len)) {
+        if (SSL_CTX_set_alpn_protos(c_ctx, alpn, (unsigned int)alpn_len)) {
             BIO_printf(bio_err, "Error setting ALPN\n");
             OPENSSL_free(alpn);
             goto end;

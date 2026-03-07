@@ -1,5 +1,5 @@
 #! /usr/bin/env perl
-# Copyright 2017-2023 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2017-2025 The OpenSSL Project Authors. All Rights Reserved.
 #
 # Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
@@ -10,15 +10,18 @@ use strict;
 use OpenSSL::Test qw/:DEFAULT cmdstr srctop_file bldtop_dir/;
 use OpenSSL::Test::Utils;
 use TLSProxy::Proxy;
+use Cwd qw(abs_path);
 
 my $test_name = "test_tls13cookie";
 setup($test_name);
 
+$ENV{OPENSSL_MODULES} = abs_path(bldtop_dir("test"));
+
 plan skip_all => "TLSProxy isn't usable on $^O"
     if $^O =~ /^(VMS)$/;
 
-plan skip_all => "$test_name needs the dynamic engine feature enabled"
-    if disabled("engine") || disabled("dynamic-engine");
+plan skip_all => "$test_name needs the module feature enabled"
+    if disabled("module");
 
 plan skip_all => "$test_name needs the sock feature enabled"
     if disabled("sock");
@@ -42,22 +45,9 @@ my $cookieseen = 0;
 my $testtype;
 
 #Test 1: Inserting a cookie into an HRR should see it echoed in the ClientHello
-$testtype = COOKIE_ONLY;
-$proxy->filter(\&cookie_filter);
-$proxy->serverflags("-curves X25519") if !disabled("ecx");
-$proxy->start() or plan skip_all => "Unable to start up Proxy for tests";
-plan tests => 2;
-SKIP: {
-    skip "ECX disabled", 1, if (disabled("ecx"));
-    ok(TLSProxy::Message->success() && $cookieseen == 1, "Cookie seen");
-}
-
-
-
-#Test 2: Same as test 1 but should also work where a new key_share is also
-#        required
+#        (when a key share is required)
 $testtype = COOKIE_AND_KEY_SHARE;
-$proxy->clear();
+$proxy->filter(\&cookie_filter);
 if (disabled("ecx")) {
     $proxy->clientflags("-curves ffdhe3072:ffdhe2048");
     $proxy->serverflags("-curves ffdhe2048");
@@ -65,8 +55,21 @@ if (disabled("ecx")) {
     $proxy->clientflags("-curves P-256:X25519");
     $proxy->serverflags("-curves X25519");
 }
-$proxy->start();
+$proxy->start() or plan skip_all => "Unable to start up Proxy for tests";
+plan tests => 2;
 ok(TLSProxy::Message->success() && $cookieseen == 1, "Cookie seen");
+
+#Test 2: Inserting a cookie into an HRR should see it echoed in the ClientHello
+#        (without a key share required)
+SKIP: {
+    skip "ECX disabled", 1, if (disabled("ecx"));
+    $testtype = COOKIE_ONLY;
+    $proxy->clear();
+    $proxy->serverflags("-curves X25519");
+    $proxy->clientflags("-curves X25519:secp256r1");
+    $proxy->start();
+    ok(TLSProxy::Message->success() && $cookieseen == 1, "Cookie seen");
+}
 
 sub cookie_filter
 {

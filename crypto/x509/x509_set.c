@@ -1,11 +1,16 @@
 /*
- * Copyright 1995-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
  */
+
+/*
+ * because of EVP_PKEY_asn1_find deprecation
+ */
+#include "internal/deprecated.h"
 
 #include <stdio.h>
 #include "internal/cryptlib.h"
@@ -119,7 +124,7 @@ int X509_up_ref(X509 *x)
     if (CRYPTO_UP_REF(&x->references, &i) <= 0)
         return 0;
 
-    REF_PRINT_COUNT("X509", x);
+    REF_PRINT_COUNT("X509", i, x);
     REF_ASSERT_ISNT(i < 2);
     return i > 1;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2022-2024 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -45,8 +45,7 @@ static const char OSSL_HPKE_SECRET_LABEL[] = "\x73\x65\x63\x72\x65\x74";
 /**
  * @brief sender or receiver context
  */
-struct ossl_hpke_ctx_st
-{
+struct ossl_hpke_ctx_st {
     OSSL_LIB_CTX *libctx; /* library context */
     char *propq; /* properties */
     int mode; /* HPKE mode */
@@ -150,7 +149,8 @@ static int hpke_aead_dec(OSSL_HPKE_CTX *hctx, const unsigned char *iv,
     size_t taglen;
 
     taglen = hctx->aead_info->taglen;
-    if (ctlen <= taglen || *ptlen < ctlen - taglen) {
+    if (ctlen <= taglen || *ptlen < ctlen - taglen
+        || aadlen > INT_MAX || ctlen > INT_MAX) {
         ERR_raise(ERR_LIB_CRYPTO, ERR_R_PASSED_INVALID_ARGUMENT);
         return 0;
     }
@@ -163,7 +163,7 @@ static int hpke_aead_dec(OSSL_HPKE_CTX *hctx, const unsigned char *iv,
         goto err;
     }
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN,
-                            hctx->noncelen, NULL) != 1) {
+                            (int)hctx->noncelen, NULL) != 1) {
         ERR_raise(ERR_LIB_CRYPTO, ERR_R_INTERNAL_ERROR);
         goto err;
     }
@@ -174,18 +174,18 @@ static int hpke_aead_dec(OSSL_HPKE_CTX *hctx, const unsigned char *iv,
     }
     /* Provide AAD. */
     if (aadlen != 0 && aad != NULL) {
-        if (EVP_DecryptUpdate(ctx, NULL, &len, aad, aadlen) != 1) {
+        if (EVP_DecryptUpdate(ctx, NULL, &len, aad, (int)aadlen) != 1) {
             ERR_raise(ERR_LIB_CRYPTO, ERR_R_INTERNAL_ERROR);
             goto err;
         }
     }
-    if (EVP_DecryptUpdate(ctx, pt, &len, ct, ctlen - taglen) != 1) {
+    if (EVP_DecryptUpdate(ctx, pt, &len, ct, (int)(ctlen - taglen)) != 1) {
         ERR_raise(ERR_LIB_CRYPTO, ERR_R_INTERNAL_ERROR);
         goto err;
     }
     *ptlen = len;
     if (!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG,
-                             taglen, (void *)(ct + ctlen - taglen))) {
+                             (int)taglen, (void *)(ct + ctlen - taglen))) {
         ERR_raise(ERR_LIB_CRYPTO, ERR_R_INTERNAL_ERROR);
         goto err;
     }
@@ -227,7 +227,8 @@ static int hpke_aead_enc(OSSL_HPKE_CTX *hctx, const unsigned char *iv,
     unsigned char tag[EVP_MAX_AEAD_TAG_LENGTH];
 
     taglen = hctx->aead_info->taglen;
-    if (*ctlen <= taglen || ptlen > *ctlen - taglen) {
+    if (*ctlen <= taglen || ptlen > *ctlen - taglen
+        || aadlen > INT_MAX || ptlen > INT_MAX) {
         ERR_raise(ERR_LIB_CRYPTO, ERR_R_PASSED_INVALID_ARGUMENT);
         return 0;
     }
@@ -244,7 +245,7 @@ static int hpke_aead_enc(OSSL_HPKE_CTX *hctx, const unsigned char *iv,
         goto err;
     }
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN,
-                            hctx->noncelen, NULL) != 1) {
+                            (int)hctx->noncelen, NULL) != 1) {
         ERR_raise(ERR_LIB_CRYPTO, ERR_R_INTERNAL_ERROR);
         goto err;
     }
@@ -255,12 +256,12 @@ static int hpke_aead_enc(OSSL_HPKE_CTX *hctx, const unsigned char *iv,
     }
     /* Provide any AAD data. */
     if (aadlen != 0 && aad != NULL) {
-        if (EVP_EncryptUpdate(ctx, NULL, &len, aad, aadlen) != 1) {
+        if (EVP_EncryptUpdate(ctx, NULL, &len, aad, (int)aadlen) != 1) {
             ERR_raise(ERR_LIB_CRYPTO, ERR_R_INTERNAL_ERROR);
             goto err;
         }
     }
-    if (EVP_EncryptUpdate(ctx, ct, &len, pt, ptlen) != 1) {
+    if (EVP_EncryptUpdate(ctx, ct, &len, pt, (int)ptlen) != 1) {
         ERR_raise(ERR_LIB_CRYPTO, ERR_R_INTERNAL_ERROR);
         goto err;
     }
@@ -272,7 +273,7 @@ static int hpke_aead_enc(OSSL_HPKE_CTX *hctx, const unsigned char *iv,
     }
     *ctlen += len;
     /* Get tag. Not a duplicate so needs to be added to the ciphertext */
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, taglen, tag) != 1) {
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, (int)taglen, tag) != 1) {
         ERR_raise(ERR_LIB_CRYPTO, ERR_R_INTERNAL_ERROR);
         goto err;
     }
@@ -842,6 +843,7 @@ OSSL_HPKE_CTX *OSSL_HPKE_CTX_new(int mode, OSSL_HPKE_SUITE suite, int role,
 
  err:
     EVP_CIPHER_free(ctx->aead_ciph);
+    OPENSSL_free(ctx->propq);
     OPENSSL_free(ctx);
     return NULL;
 }

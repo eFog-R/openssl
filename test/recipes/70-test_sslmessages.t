@@ -1,5 +1,5 @@
 #! /usr/bin/env perl
-# Copyright 2015-2021 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2015-2024 The OpenSSL Project Authors. All Rights Reserved.
 #
 # Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
@@ -12,15 +12,18 @@ use OpenSSL::Test::Utils;
 use File::Temp qw(tempfile);
 use TLSProxy::Proxy;
 use checkhandshake qw(checkhandshake @handmessages @extensions);
+use Cwd qw(abs_path);
 
 my $test_name = "test_sslmessages";
 setup($test_name);
 
+$ENV{OPENSSL_MODULES} = abs_path(bldtop_dir("test"));
+
 plan skip_all => "TLSProxy isn't usable on $^O"
     if $^O =~ /^(VMS)$/;
 
-plan skip_all => "$test_name needs the dynamic engine feature enabled"
-    if disabled("engine") || disabled("dynamic-engine");
+plan skip_all => "$test_name needs the module feature enabled"
+    if disabled("module");
 
 plan skip_all => "$test_name needs the sock feature enabled"
     if disabled("sock");
@@ -172,6 +175,7 @@ my $proxy = TLSProxy::Proxy->new(
 #Test 1: Check we get all the right messages for a default handshake
 (undef, my $session) = tempfile();
 $proxy->serverconnects(2);
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
 $proxy->clientflags("-no_tls1_3 -sess_out ".$session);
 $proxy->start() or plan skip_all => "Unable to start up Proxy for tests";
 plan tests => 21;
@@ -181,6 +185,7 @@ checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
 
 #Test 2: Resumption handshake
 $proxy->clearClient();
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
 $proxy->clientflags("-no_tls1_3 -sess_in ".$session);
 $proxy->clientstart();
 checkhandshake($proxy, checkhandshake::RESUME_HANDSHAKE,
@@ -195,6 +200,7 @@ SKIP: {
 
     #Test 3: A status_request handshake (client request only)
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     $proxy->clientflags("-no_tls1_3 -status");
     $proxy->start();
     checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
@@ -204,6 +210,7 @@ SKIP: {
 
     #Test 4: A status_request handshake (server support only)
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     $proxy->clientflags("-no_tls1_3");
     $proxy->serverflags("-status_file "
                         .srctop_file("test", "recipes", "ocsp-response.der"));
@@ -214,6 +221,7 @@ SKIP: {
 
     #Test 5: A status_request handshake (client and server)
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     $proxy->clientflags("-no_tls1_3 -status");
     $proxy->serverflags("-status_file "
                         .srctop_file("test", "recipes", "ocsp-response.der"));
@@ -227,6 +235,7 @@ SKIP: {
 
 #Test 6: A client auth handshake
 $proxy->clear();
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
 $proxy->clientflags("-no_tls1_3 -cert ".srctop_file("apps", "server.pem"));
 $proxy->serverflags("-Verify 5");
 $proxy->start();
@@ -236,6 +245,7 @@ checkhandshake($proxy, checkhandshake::CLIENT_AUTH_HANDSHAKE,
 
 #Test 7: A handshake with a renegotiation
 $proxy->clear();
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
 $proxy->clientflags("-no_tls1_3");
 $proxy->serverflags("-client_renegotiation");
 $proxy->reneg(1);
@@ -246,6 +256,7 @@ checkhandshake($proxy, checkhandshake::RENEG_HANDSHAKE,
 
 #Test 8: Server name handshake (no client request)
 $proxy->clear();
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
 $proxy->clientflags("-no_tls1_3 -noservername");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
@@ -255,6 +266,7 @@ checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
 
 #Test 9: Server name handshake (server support only)
 $proxy->clear();
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
 $proxy->clientflags("-no_tls1_3 -noservername");
 $proxy->serverflags("-servername testhost");
 $proxy->start();
@@ -265,6 +277,7 @@ checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
 
 #Test 10: Server name handshake (client and server)
 $proxy->clear();
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
 $proxy->clientflags("-no_tls1_3 -servername testhost");
 $proxy->serverflags("-servername testhost");
 $proxy->start();
@@ -275,6 +288,7 @@ checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
 
 #Test 11: ALPN handshake (client request only)
 $proxy->clear();
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
 $proxy->clientflags("-no_tls1_3 -alpn test");
 $proxy->start();
 checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
@@ -284,6 +298,7 @@ checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
 
 #Test 12: ALPN handshake (server support only)
 $proxy->clear();
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
 $proxy->clientflags("-no_tls1_3");
 $proxy->serverflags("-alpn test");
 $proxy->start();
@@ -293,6 +308,7 @@ checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
 
 #Test 13: ALPN handshake (client and server)
 $proxy->clear();
+$proxy->cipherc("DEFAULT:\@SECLEVEL=2");
 $proxy->clientflags("-no_tls1_3 -alpn test");
 $proxy->serverflags("-alpn test");
 $proxy->start();
@@ -308,6 +324,7 @@ SKIP: {
 
     #Test 14: SCT handshake (client request only)
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     #Note: -ct also sends status_request
     $proxy->clientflags("-no_tls1_3 -ct");
     $proxy->serverflags("-status_file "
@@ -327,6 +344,7 @@ SKIP: {
 
     #Test 15: SCT handshake (server support only)
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     #Note: -ct also sends status_request
     $proxy->clientflags("-no_tls1_3");
     $proxy->serverflags("-status_file "
@@ -345,6 +363,7 @@ SKIP: {
     #There is no built-in server side support for this so we are actually also
     #testing custom extensions here
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     #Note: -ct also sends status_request
     $proxy->clientflags("-no_tls1_3 -ct");
     $proxy->serverflags("-status_file "
@@ -367,6 +386,7 @@ SKIP: {
 
     #Test 17: NPN handshake (client request only)
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     $proxy->clientflags("-no_tls1_3 -nextprotoneg test");
     $proxy->start();
     checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
@@ -376,6 +396,7 @@ SKIP: {
 
     #Test 18: NPN handshake (server support only)
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     $proxy->clientflags("-no_tls1_3");
     $proxy->serverflags("-nextprotoneg test");
     $proxy->start();
@@ -385,6 +406,7 @@ SKIP: {
 
     #Test 19: NPN handshake (client and server)
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     $proxy->clientflags("-no_tls1_3 -nextprotoneg test");
     $proxy->serverflags("-nextprotoneg test");
     $proxy->start();
@@ -405,6 +427,7 @@ SKIP: {
     #SRP extension gets added on the client side. There is no SRP extension
     #generated on the server side anyway.
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     $proxy->clientflags("-no_tls1_3 -srpuser user -srppass pass:pass");
     $proxy->start();
     checkhandshake($proxy, checkhandshake::DEFAULT_HANDSHAKE,
@@ -417,6 +440,7 @@ SKIP: {
 SKIP: {
     skip "No EC support in this OpenSSL build", 1 if disabled("ec");
     $proxy->clear();
+    $proxy->cipherc("DEFAULT:\@SECLEVEL=2");
     $proxy->clientflags("-no_tls1_3");
     $proxy->serverflags("-no_tls1_3");
     $proxy->ciphers("ECDHE-RSA-AES128-SHA");

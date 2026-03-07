@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -27,7 +27,7 @@ void ossl_ffc_params_init(FFC_PARAMS *params)
 
 void ossl_ffc_params_cleanup(FFC_PARAMS *params)
 {
-#ifdef FIPS_MODULE
+#ifdef OPENSSL_PEDANTIC_ZEROIZATION
     BN_clear_free(params->p);
     BN_clear_free(params->q);
     BN_clear_free(params->g);
@@ -214,33 +214,34 @@ int ossl_ffc_params_cmp(const FFC_PARAMS *a, const FFC_PARAMS *b, int ignore_q)
 }
 
 int ossl_ffc_params_todata(const FFC_PARAMS *ffc, OSSL_PARAM_BLD *bld,
-                      OSSL_PARAM params[])
+                           const FFC_OSSL_PARAMS *pp)
 {
     int test_flags;
 
+#define PP(f) (pp == NULL ? NULL : pp->f)
     if (ffc->p != NULL
-        && !ossl_param_build_set_bn(bld, params, OSSL_PKEY_PARAM_FFC_P, ffc->p))
+        && !ossl_param_build_set_bn(bld, PP(p), OSSL_PKEY_PARAM_FFC_P, ffc->p))
         return 0;
     if (ffc->q != NULL
-        && !ossl_param_build_set_bn(bld, params, OSSL_PKEY_PARAM_FFC_Q, ffc->q))
+        && !ossl_param_build_set_bn(bld, PP(q), OSSL_PKEY_PARAM_FFC_Q, ffc->q))
         return 0;
     if (ffc->g != NULL
-        && !ossl_param_build_set_bn(bld, params, OSSL_PKEY_PARAM_FFC_G, ffc->g))
+        && !ossl_param_build_set_bn(bld, PP(g), OSSL_PKEY_PARAM_FFC_G, ffc->g))
         return 0;
     if (ffc->j != NULL
-        && !ossl_param_build_set_bn(bld, params, OSSL_PKEY_PARAM_FFC_COFACTOR,
-                                    ffc->j))
+        && !ossl_param_build_set_bn(bld, PP(cofactor),
+                                    OSSL_PKEY_PARAM_FFC_COFACTOR, ffc->j))
         return 0;
-    if (!ossl_param_build_set_int(bld, params, OSSL_PKEY_PARAM_FFC_GINDEX,
+    if (!ossl_param_build_set_int(bld, PP(g_index), OSSL_PKEY_PARAM_FFC_GINDEX,
                                   ffc->gindex))
         return 0;
-    if (!ossl_param_build_set_int(bld, params, OSSL_PKEY_PARAM_FFC_PCOUNTER,
+    if (!ossl_param_build_set_int(bld, PP(p_counter), OSSL_PKEY_PARAM_FFC_PCOUNTER,
                                   ffc->pcounter))
         return 0;
-    if (!ossl_param_build_set_int(bld, params, OSSL_PKEY_PARAM_FFC_H, ffc->h))
+    if (!ossl_param_build_set_int(bld, PP(h), OSSL_PKEY_PARAM_FFC_H, ffc->h))
         return 0;
     if (ffc->seed != NULL
-        && !ossl_param_build_set_octet_string(bld, params,
+        && !ossl_param_build_set_octet_string(bld, PP(seed),
                                               OSSL_PKEY_PARAM_FFC_SEED,
                                               ffc->seed, ffc->seedlen))
         return 0;
@@ -249,35 +250,36 @@ int ossl_ffc_params_todata(const FFC_PARAMS *ffc, OSSL_PARAM_BLD *bld,
         const char *name = ossl_ffc_named_group_get_name(group);
 
         if (name == NULL
-            || !ossl_param_build_set_utf8_string(bld, params,
+            || !ossl_param_build_set_utf8_string(bld, PP(group_name),
                                                  OSSL_PKEY_PARAM_GROUP_NAME,
                                                  name))
             return 0;
     }
     test_flags = ((ffc->flags & FFC_PARAM_FLAG_VALIDATE_PQ) != 0);
-    if (!ossl_param_build_set_int(bld, params,
+    if (!ossl_param_build_set_int(bld, PP(validate_pq),
                                   OSSL_PKEY_PARAM_FFC_VALIDATE_PQ, test_flags))
         return 0;
     test_flags = ((ffc->flags & FFC_PARAM_FLAG_VALIDATE_G) != 0);
-    if (!ossl_param_build_set_int(bld, params,
+    if (!ossl_param_build_set_int(bld, PP(validate_g),
                                   OSSL_PKEY_PARAM_FFC_VALIDATE_G, test_flags))
         return 0;
     test_flags = ((ffc->flags & FFC_PARAM_FLAG_VALIDATE_LEGACY) != 0);
-    if (!ossl_param_build_set_int(bld, params,
+    if (!ossl_param_build_set_int(bld, PP(validate_legacy),
                                   OSSL_PKEY_PARAM_FFC_VALIDATE_LEGACY,
                                   test_flags))
         return 0;
 
     if (ffc->mdname != NULL
-        && !ossl_param_build_set_utf8_string(bld, params,
+        && !ossl_param_build_set_utf8_string(bld, PP(digest),
                                              OSSL_PKEY_PARAM_FFC_DIGEST,
                                              ffc->mdname))
        return 0;
     if (ffc->mdprops != NULL
-        && !ossl_param_build_set_utf8_string(bld, params,
+        && !ossl_param_build_set_utf8_string(bld, PP(propq),
                                              OSSL_PKEY_PARAM_FFC_DIGEST_PROPS,
                                              ffc->mdprops))
         return 0;
+#undef PP
     return 1;
 }
 

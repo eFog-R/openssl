@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -12,6 +12,7 @@
 #include "internal/ktls.h"
 #include "record/record_local.h"
 #include "internal/cryptlib.h"
+#include "internal/ssl_unwrap.h"
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
 #include <openssl/core_names.h>
@@ -38,7 +39,7 @@ int tls13_hkdf_expand_ex(OSSL_LIB_CTX *libctx, const char *propq,
 {
     EVP_KDF *kdf = EVP_KDF_fetch(libctx, OSSL_KDF_NAME_TLS1_3_KDF, propq);
     EVP_KDF_CTX *kctx;
-    OSSL_PARAM params[7], *p = params;
+    OSSL_PARAM params[8], *p = params;
     int mode = EVP_PKEY_HKDEF_MODE_EXPAND_ONLY;
     const char *mdname = EVP_MD_get0_name(md);
     int ret;
@@ -83,6 +84,10 @@ int tls13_hkdf_expand_ex(OSSL_LIB_CTX *libctx, const char *propq,
         *p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_DATA,
                                                  (unsigned char *)data,
                                                  datalen);
+    if (propq != NULL)
+        *p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_PROPERTIES,
+                                                (char *)propq, 0);
+
     *p++ = OSSL_PARAM_construct_end();
 
     ret = EVP_KDF_derive(kctx, out, outlen, params) <= 0;
@@ -188,7 +193,7 @@ int tls13_generate_secret(SSL_CONNECTION *s, const EVP_MD *md,
 
     mdleni = EVP_MD_get_size(md);
     /* Ensure cast to size_t is safe */
-    if (!ossl_assert(mdleni >= 0)) {
+    if (!ossl_assert(mdleni > 0)) {
         SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
         EVP_KDF_CTX_free(kctx);
         return 0;
@@ -361,7 +366,7 @@ static int derive_secret_key_and_iv(SSL_CONNECTION *s, const EVP_MD *md,
     int mode, mac_mdleni;
 
     /* Ensure cast to size_t is safe */
-    if (!ossl_assert(hashleni >= 0)) {
+    if (!ossl_assert(hashleni > 0)) {
         SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_EVP_LIB);
         return 0;
     }
@@ -379,7 +384,7 @@ static int derive_secret_key_and_iv(SSL_CONNECTION *s, const EVP_MD *md,
         && mac_type == NID_hmac) {
         mac_mdleni = EVP_MD_get_size(mac_md);
 
-        if (mac_mdleni < 0) {
+        if (mac_mdleni <= 0) {
             SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
             return 0;
         }
@@ -443,6 +448,31 @@ static int derive_secret_key_and_iv(SSL_CONNECTION *s, const EVP_MD *md,
     }
 
     return 1;
+}
+
+static int tls13_store_hash(SSL_CONNECTION *s, unsigned char *hash, size_t len)
+{
+    size_t hashlen;
+
+    if (!ssl3_digest_cached_records(s, 1)
+            || !ssl_handshake_hash(s, hash, len, &hashlen)) {
+        /* SSLfatal() already called */;
+        return 0;
+    }
+
+    return 1;
+}
+
+int tls13_store_handshake_traffic_hash(SSL_CONNECTION *s)
+{
+    return tls13_store_hash(s, s->handshake_traffic_hash,
+                            sizeof(s->handshake_traffic_hash));
+}
+
+int tls13_store_server_finished_hash(SSL_CONNECTION *s)
+{
+    return tls13_store_hash(s, s->server_finished_hash,
+                            sizeof(s->server_finished_hash));
 }
 
 int tls13_change_cipher_state(SSL_CONNECTION *s, int which)
@@ -577,7 +607,7 @@ int tls13_change_cipher_state(SSL_CONNECTION *s, int which)
 
             if (!ssl_log_secret(s, EARLY_EXPORTER_SECRET_LABEL,
                                 s->early_exporter_master_secret, hashlen)) {
-                /* SSLfatal() already called */
+                SSLfatal(s, SSL_AD_INTERNAL_ERROR, ERR_R_INTERNAL_ERROR);
                 goto err;
             }
         } else if (which & SSL3_CC_HANDSHAKE) {
@@ -632,6 +662,7 @@ int tls13_change_cipher_state(SSL_CONNECTION *s, int which)
             label = server_application_traffic;
             labellen = sizeof(server_application_traffic) - 1;
             log_label = SERVER_APPLICATION_LABEL;
+            hash = s->server_finished_hash;
         }
     }
 
@@ -646,16 +677,6 @@ int tls13_change_cipher_state(SSL_CONNECTION *s, int which)
             goto err;
         }
     }
-
-    /*
-     * Save the hash of handshakes up to now for use when we calculate the
-     * client application traffic secret
-     */
-    if (label == server_application_traffic)
-        memcpy(s->server_finished_hash, hashval, hashlen);
-
-    if (label == server_handshake_traffic)
-        memcpy(s->handshake_traffic_hash, hashval, hashlen);
 
     if (label == client_application_traffic) {
         /*

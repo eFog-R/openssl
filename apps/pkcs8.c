@@ -1,5 +1,5 @@
 /*
- * Copyright 1999-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1999-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -227,9 +227,6 @@ int pkcs8_main(int argc, char **argv)
                           informat == FORMAT_UNDEF ? FORMAT_PEM : informat);
     if (in == NULL)
         goto end;
-    out = bio_open_owner(outfile, outformat, private);
-    if (out == NULL)
-        goto end;
 
     if (topk8) {
         pkey = load_key(infile, informat, 1, passin, e, "key");
@@ -240,6 +237,8 @@ int pkcs8_main(int argc, char **argv)
             ERR_print_errors(bio_err);
             goto end;
         }
+        if ((out = bio_open_owner(outfile, outformat, private)) == NULL)
+            goto end;
         if (nocrypt) {
             assert(private);
             if (outformat == FORMAT_PEM) {
@@ -285,7 +284,7 @@ int pkcs8_main(int argc, char **argv)
                 BIO_printf(bio_err, "Password required\n");
                 goto end;
             }
-            p8 = PKCS8_set0_pbe(p8pass, strlen(p8pass), p8inf, pbe);
+            p8 = PKCS8_set0_pbe(p8pass, (int)strlen(p8pass), p8inf, pbe);
             if (p8 == NULL) {
                 X509_ALGOR_free(pbe);
                 BIO_printf(bio_err, "Error encrypting key\n");
@@ -345,7 +344,7 @@ int pkcs8_main(int argc, char **argv)
             BIO_printf(bio_err, "Password required\n");
             goto end;
         }
-        p8inf = PKCS8_decrypt(p8, p8pass, strlen(p8pass));
+        p8inf = PKCS8_decrypt(p8, p8pass, (int)strlen(p8pass));
     }
 
     if (p8inf == NULL) {
@@ -361,6 +360,9 @@ int pkcs8_main(int argc, char **argv)
     }
 
     assert(private);
+    out = bio_open_owner(outfile, outformat, private);
+    if (out == NULL)
+        goto end;
     if (outformat == FORMAT_PEM) {
         if (traditional)
             PEM_write_bio_PrivateKey_traditional(out, pkey, NULL, NULL, 0,

@@ -1,5 +1,5 @@
 /*
- * Copyright 2005-2023 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2005-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -8,11 +8,13 @@
  */
 
 #include "internal/e_os.h"
+#include "internal/e_winsock.h"          /* struct timeval for DTLS_CTRL_GET_TIMEOUT */
 #include <stdio.h>
 #include <openssl/objects.h>
 #include <openssl/rand.h>
 #include "ssl_local.h"
 #include "internal/time.h"
+#include "internal/ssl_unwrap.h"
 
 static int dtls1_handshake_write(SSL_CONNECTION *s);
 static size_t dtls1_link_min_mtu(void);
@@ -395,7 +397,7 @@ int dtls1_handle_timeout(SSL_CONNECTION *s)
     }
 
     if (s->d1->timer_cb != NULL)
-        s->d1->timeout_duration_us = s->d1->timer_cb(SSL_CONNECTION_GET_SSL(s),
+        s->d1->timeout_duration_us = s->d1->timer_cb(SSL_CONNECTION_GET_USER_SSL(s),
                                                      s->d1->timeout_duration_us);
     else
         dtls1_double_timeout(s);
@@ -766,7 +768,7 @@ int DTLSv1_listen(SSL *ssl, BIO_ADDR *client)
             BIO_ADDR_free(tmpclient);
             tmpclient = NULL;
 
-            if (BIO_write(wbio, wbuf, wreclen) < (int)wreclen) {
+            if (BIO_write(wbio, wbuf, (int)wreclen) < (int)wreclen) {
                 if (BIO_should_retry(wbio)) {
                     /*
                      * Non-blocking IO...but we're stateless, so we're just
@@ -861,7 +863,7 @@ int dtls1_shutdown(SSL *s)
     BIO *wbio;
     SSL_CONNECTION *sc = SSL_CONNECTION_FROM_SSL_ONLY(s);
 
-    if (s == NULL)
+    if (sc == NULL)
         return -1;
 
     wbio = SSL_get_wbio(s);

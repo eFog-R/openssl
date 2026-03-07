@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2024 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2002-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -396,7 +396,8 @@ static CONF_MODULE *module_add(DSO *dso, const char *name,
 static CONF_MODULE *module_find(const char *name)
 {
     CONF_MODULE *tmod;
-    int i, nchar;
+    int i;
+    size_t nchar;
     char *p;
     STACK_OF(CONF_MODULE) *mods;
 
@@ -410,7 +411,9 @@ static CONF_MODULE *module_find(const char *name)
     if (!RUN_ONCE(&init_module_list_lock, do_init_module_list_lock))
         return NULL;
 
-    ossl_rcu_read_lock(module_list_lock);
+    if (!ossl_rcu_read_lock(module_list_lock))
+        return NULL;
+
     mods = ossl_rcu_deref(&supported_modules);
 
     for (i = 0; i < sk_CONF_MODULE_num(mods); i++) {
@@ -528,12 +531,13 @@ void CONF_modules_unload(int all)
 
     old_modules = ossl_rcu_deref(&supported_modules);
     new_modules = sk_CONF_MODULE_dup(old_modules);
-    to_delete = sk_CONF_MODULE_new_null();
 
     if (new_modules == NULL) {
         ossl_rcu_write_unlock(module_list_lock);
         return;
     }
+
+    to_delete = sk_CONF_MODULE_new_null();
 
     /* unload modules in reverse order */
     for (i = sk_CONF_MODULE_num(new_modules) - 1; i >= 0; i--) {
@@ -691,6 +695,18 @@ char *CONF_get1_default_config_file(void)
         return OPENSSL_strdup(file);
 
     t = X509_get_default_cert_area();
+    /*
+     * On windows systems with -DOSSL_WINCTX set, if the needed registry
+     * keys are not yet set, openssl applets will return, due to an inability
+     * to locate various directories, like the default cert area.  In that
+     * event, clone an empty string here, so that commands like openssl version
+     * continue to operate properly without needing to set OPENSSL_CONF.
+     * Applets like cms will fail gracefully later when they try to parse an
+     * empty config file
+     */
+    if (t == NULL)
+        return OPENSSL_strdup("");
+
 #ifndef OPENSSL_SYS_VMS
     sep = "/";
 #endif
@@ -741,7 +757,7 @@ int CONF_parse_list(const char *list_, int sep, int nospc,
                 while (isspace((unsigned char)*tmpend))
                     tmpend--;
             }
-            ret = list_cb(lstart, tmpend - lstart + 1, arg);
+            ret = list_cb(lstart, (int)(tmpend - lstart + 1), arg);
         }
         if (ret <= 0)
             return ret;

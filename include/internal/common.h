@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2024 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -22,8 +22,8 @@
 #  define ossl_likely(x)     __builtin_expect(!!(x), 1)
 #  define ossl_unlikely(x)   __builtin_expect(!!(x), 0)
 # else
-#  define ossl_likely(x)     x
-#  define ossl_unlikely(x)   x
+#  define ossl_likely(x)     (x)
+#  define ossl_unlikely(x)   (x)
 # endif
 
 # if defined(__GNUC__) || defined(__clang__)
@@ -227,5 +227,10 @@ static ossl_inline int ossl_is_absolute_path(const char *path)
 # endif
     return path[0] == '/';
 }
+
+const char *ossl_get_openssldir(void);
+const char *ossl_get_enginesdir(void);
+const char *ossl_get_modulesdir(void);
+const char *ossl_get_wininstallcontext(void);
 
 #endif
